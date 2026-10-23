@@ -1,0 +1,224 @@
+import { chromium, devices } from 'playwright';
+import fs from 'fs';
+import { spawn } from 'child_process';
+const ROOT = new URL('..', import.meta.url).pathname;
+const SHOTS = process.env.SHOTS || '/home/claude/testenv/shots';
+fs.mkdirSync(SHOTS, { recursive: true });
+const srv = spawn('node', ['/opt/node22/lib/node_modules/http-server/bin/http-server', ROOT, '-p', '8765', '-c-1', '-s'], { stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+const fx = {
+  'fixture_lista.png': JSON.parse(fs.readFileSync('/home/claude/testenv/fixture_lista.json')),
+  'fixture_lista2.png': JSON.parse(fs.readFileSync('/home/claude/testenv/fixture_lista2.json')),
+};
+let ok = 0, fail = 0;
+const check = (cond, msg) => { if (cond) { ok++; console.log('  ✓', msg); } else { fail++; console.log('  ✗', msg); } };
+
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ ...devices['iPhone 13'], locale: 'es-UY', permissions: ['clipboard-read', 'clipboard-write'] });
+await ctx.addInitScript(fx => {
+  window.__OCR_TEST_PROVIDER__ = async (file, w) => {
+    const f = fx[file.name]; const k = w / f.width;
+    return f.words.map(x => ({ ...x, x0: x.x0 * k, x1: x.x1 * k, y0: x.y0 * k, y1: x.y1 * k }));
+  };
+  window.__shared = [];
+  navigator.canShare = () => true;
+  navigator.share = async (d) => { window.__shared.push({ text: d.text, files: (d.files || []).map(f => ({ name: f.name, type: f.type, size: f.size })) }); };
+}, fx);
+const page = await ctx.newPage();
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+await page.goto('http://localhost:8765/index.html');
+const shot = n => page.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: false });
+await page.waitForSelector('text=No hay jornada cargada');
+await shot('01-inicio');
+
+console.log('Ajustes');
+await page.click('#tabbar [data-tab=settings]');
+await page.fill('#s-name', 'Tía Ana');
+await page.fill('#s-phone', '099 123 456');
+await page.click('[data-act=s-save] >> nth=0');
+await page.waitForSelector('text=Guardado como +59899123456');
+check(true, 'teléfono normalizado a +59899123456');
+
+console.log('Importar 2 capturas');
+await page.click('#tabbar [data-tab=import]');
+await page.setInputFiles('#imp-gal', [`${ROOT}tests/fixture_lista.png`, `${ROOT}tests/fixture_lista2.png`]);
+await page.waitForSelector('text=2. Revisar', { timeout: 20000 });
+await page.waitForFunction(() => !document.querySelector('#view .spinner'));
+const n = await page.locator('.rev').count();
+check(n === 12, `12 filas para revisar (hay ${n})`);
+check(await page.locator('.rev .pill:has-text("Igual a fila")').count() === 2, 'duplicado Zum Felde 2190 casa marcado en 2 filas (no eliminado)');
+check(await page.locator('.rev.low').count() >= 1, 'filas con baja confianza resaltadas');
+check(await page.locator('.rev img').count() === 12, 'cada fila muestra recorte de la captura');
+await shot('02-revision');
+await page.screenshot({ path: `${SHOTS}/02b-revision-full.png`, fullPage: true });
+// corregir error OCR
+const bad = page.locator('.rev input[type=text]').nth(4);
+await bad.fill('José Batlle y Ordóñez 5678, unidad habitacional, bloque 3');
+await bad.press('Enter'); await bad.blur();
+await page.waitForTimeout(200);
+// desmarcar el duplicado (fila 9)
+await page.locator('.rev input[type=checkbox]').nth(8).uncheck();
+await page.waitForTimeout(200);
+check(await page.locator('[data-act=imp-commit]').innerText() === 'Importar 11 direcciones', 'botón importar con 11 tras desmarcar duplicado');
+await page.click('[data-act=imp-commit]');
+await page.waitForSelector('#list');
+check(await page.locator('#list .addr').count() === 11, '11 pendientes en reparto');
+await shot('03-reparto');
+
+console.log('Buscar y entregar');
+await page.fill('#q', '2190');
+await page.waitForTimeout(150);
+check(await page.locator('#list .addr').count() === 2, 'búsqueda "2190" devuelve casa y apto 2');
+await page.fill('#q', 'zum apto');
+await page.click('#list .addr >> nth=0');
+await page.waitForSelector('text=Hay 2 registros');
+check(true, 'aviso de misma puerta con otra referencia');
+await shot('04-detalle');
+await page.click('[data-act=start][data-type=delivered]');
+await page.click('[data-act=review]');
+check(await page.locator('#pkg-err').innerText() === 'Falta el número de paquete', 'paquete obligatorio');
+await page.fill('#f-pkg', '#1567');
+await page.fill('#f-ci', '4.567.890-3');
+check((await page.locator('#ci-msg').innerText()).includes('no coincide'), 'aviso de dígito verificador incorrecto');
+await page.fill('#f-ci', '45678905');
+check((await page.locator('#ci-msg').innerText()).includes('4567890-5 ✓'), 'cédula formateada 4567890-5 válida');
+await shot('05-form-entregado');
+await page.click('[data-act=review]');
+await page.waitForSelector('#msgPrev');
+const msg1 = await page.locator('#msgPrev').innerText();
+check(msg1 === '#1567\nZum Felde 2190, apto 2\n4567890-5', 'mensaje exacto: ' + JSON.stringify(msg1));
+await shot('06-confirmar');
+await page.click('[data-act=commit]');
+await page.waitForSelector('[data-act=wa-open]');
+const href = await page.getAttribute('[data-act=wa-open]', 'href');
+check(href === 'whatsapp://send?phone=59899123456&text=%231567%0AZum%20Felde%202190%2C%20apto%202%0A4567890-5', 'enlace whatsapp:// correcto');
+await shot('07-enviar');
+await page.evaluate(() => document.querySelector('[data-act=wa-open]').addEventListener('click', e => e.preventDefault(), { once: true }));
+await page.click('[data-act=wa-open]');
+await page.waitForTimeout(300);
+let it = await page.evaluate(() => window.__app.S.items.find(i => i.pkg === '1567'));
+check(it.sendStatus === 'awaiting', 'tras abrir WhatsApp queda "pendiente de confirmar" (NO enviado)');
+// simular vuelta desde WhatsApp
+await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+await page.waitForSelector('#m-yes');
+await shot('08-confirmar-envio');
+await page.click('#m-yes');
+await page.waitForSelector('#list');
+it = await page.evaluate(() => window.__app.S.items.find(i => i.pkg === '1567'));
+check(it.sendStatus === 'sent' && it.status === 'delivered', 'marcado como enviado solo tras confirmación del usuario');
+
+console.log('No entregado con foto');
+await page.fill('#q', 'carrasco');
+await page.click('#list .addr >> nth=0');
+await page.click('[data-act=start][data-type=failed]');
+await page.fill('#f-pkg', '2001');
+await page.check('input[name=reason][value=otro]');
+await page.fill('#f-other', 'El portero no permitió el ingreso');
+await page.setInputFiles('#in-gal', `${ROOT}icons/icon-512.png`);
+await page.waitForSelector('#view img.photo');
+await shot('09-form-no-entregado');
+await page.click('[data-act=review]');
+await page.waitForSelector('#msgPrev');
+const msg2 = await page.locator('#msgPrev').innerText();
+check(msg2 === '#2001\nCamino Carrasco 7012\nNo se entregó porque el portero no permitió el ingreso.', 'mensaje no entrega: ' + JSON.stringify(msg2));
+await page.click('[data-act=commit]');
+await page.waitForSelector('[data-act=share-photo]');
+await shot('10-enviar-foto');
+await page.click('[data-act=share-photo]');
+await page.waitForSelector('#m-yes');
+const shared = await page.evaluate(() => window.__shared);
+check(shared.length === 1 && shared[0].files.length === 1 && shared[0].files[0].type === 'image/jpeg' && shared[0].text === msg2, 'Web Share recibe foto JPEG + texto');
+const clip = await page.evaluate(() => navigator.clipboard.readText());
+check(clip === msg2, 'texto copiado al portapapeles como respaldo');
+await page.click('#m-no');
+await page.waitForTimeout(200);
+it = await page.evaluate(() => window.__app.S.items.find(i => i.pkg === '2001'));
+check(it.sendStatus === 'error', 'si el usuario dice que no se envió: estado error/no confirmado');
+// reintento: no crea un nuevo registro
+await page.click('[data-act=share-photo]');
+await page.waitForSelector('#m-yes'); await page.click('#m-yes');
+await page.waitForSelector('#list');
+const cnt = await page.evaluate(() => window.__app.S.items.filter(i => i.pkg === '2001').length);
+it = await page.evaluate(() => window.__app.S.items.find(i => i.pkg === '2001'));
+check(cnt === 1 && it.sendAttempts === 2 && it.sendStatus === 'sent', 'reintento usa el mismo registro (2 intentos, 1 reporte)');
+
+console.log('Paquete duplicado');
+await page.fill('#q', 'ellauri');
+await page.click('#list .addr >> nth=0');
+await page.click('[data-act=start][data-type=delivered]');
+await page.fill('#f-pkg', '1567'); await page.fill('#f-ci', '1234567-2');
+await page.click('[data-act=review]');
+await page.waitForSelector('#msgPrev');
+check(await page.locator('.alert:has-text("ya tiene un reporte")').count() === 1, 'advertencia de número de paquete ya reportado');
+await shot('11-duplicado');
+await page.click('[data-act=commit]');
+await page.waitForSelector('#askOk');
+await page.click('#askNo');
+check(await page.evaluate(() => window.__app.S.items.find(i => i.address.startsWith('Ellauri')).status) === 'pending', 'al cancelar, no se registra el reporte');
+// enviar más tarde
+await page.fill('#f-pkg', '1999').catch(() => {});
+await page.goBack(); await page.waitForSelector('#f-pkg'); await page.fill('#f-pkg', '1999');
+await page.click('[data-act=review]'); await page.waitForSelector('#msgPrev');
+await page.click('[data-act=commit]');
+await page.waitForSelector('[data-act=later]'); await page.click('[data-act=later]');
+
+console.log('Historial y persistencia');
+await page.click('#tabbar [data-tab=history]');
+await page.waitForSelector('.stats');
+const stats = await page.locator('.stat b').allInnerTexts();
+check(JSON.stringify(stats) === JSON.stringify(['11', '8', '2', '1', '1']), 'estadísticas ' + stats.join(','));
+check(await page.locator('text=Sin enviar o sin confirmar').count() === 1, 'lista de reportes sin enviar');
+await shot('12-historial');
+await page.reload();
+await page.waitForSelector('#list');
+check(await page.evaluate(() => window.__app.S.items.length) === 11, 'datos persisten tras recargar');
+check(await page.evaluate(() => location.href) === 'http://localhost:8765/index.html', 'la URL nunca contiene datos personales');
+
+console.log('Recuperar borrador tras recarga (iOS recarga al usar la cámara)');
+await page.fill('#q', 'libertad');
+await page.click('#list .addr >> nth=0');
+await page.click('[data-act=start][data-type=failed]');
+await page.fill('#f-pkg', '3003');
+await page.check('input[name=reason][value=ausente]');
+await page.waitForTimeout(200);
+await page.reload();
+await page.waitForSelector('#f-pkg');
+check(await page.inputValue('#f-pkg') === '3003' && await page.isChecked('input[name=reason][value=ausente]'), 'formulario recuperado');
+
+console.log('API opcional (simulada)');
+await page.click('[data-act=back]');
+await page.waitForSelector('#list');
+await page.click('#tabbar [data-tab=settings]');
+await page.click('details summary'); await page.check('#s-api'); await page.fill('#s-apiurl', 'https://worker.test/send'); await page.fill('#s-apitok', 'k');
+await page.click('[data-act=s-save] >> nth=1');
+let apiBody = null;
+await page.route('https://worker.test/send', async r => { apiBody = JSON.parse(r.request().postData()); await r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, messageId: 'wamid.X' }) }); });
+await page.click('#tabbar [data-tab=history]');
+await page.click('text=#1999');
+await page.click('[data-act=goto-send]');
+await page.click('[data-act=api-send]');
+await page.waitForSelector('#list');
+it = await page.evaluate(() => window.__app.S.items.find(i => i.pkg === '1999'));
+check(apiBody && apiBody.to === '59899123456' && apiBody.text.startsWith('#1999') && it.sendStatus === 'sent' && it.sentVia === 'api', 'API: envía y marca enviado solo con messageId');
+
+console.log('Borrar jornada');
+await page.fill('#q', 'libertad');
+await page.click('#list .addr >> nth=0');
+await page.click('[data-act=start][data-type=failed]');
+await page.click('[data-act=back]');
+await page.waitForSelector('[data-act=start]');
+check(await page.evaluate(async () => (await window.__app.DB.getMeta('draft')) === null), 'al cancelar, el borrador se descarta');
+await page.click('[data-act=back]'); await page.waitForSelector('#list');
+await page.click('#tabbar [data-tab=history]');
+await page.click('[data-act=day-del] >> nth=0');
+await page.click('#askOk');
+await page.waitForTimeout(300);
+check(await page.evaluate(async () => (await window.__app.DB.listDays()).length) === 0, 'jornada borrada');
+check(await page.evaluate(() => new Promise(r => { const q = indexedDB.open('reparto-reportes'); q.onsuccess = () => { const t = q.result.transaction(['photos', 'items']); const a = t.objectStore('photos').count(); const b = t.objectStore('items').count(); t.oncomplete = () => r(a.result + b.result); }; })) === 0, 'fotos y registros eliminados');
+
+check(errors.length === 0, 'sin errores en consola ' + errors.join(' | '));
+await browser.close(); srv.kill();
+console.log(`\n${ok} OK, ${fail} fallos`);
+process.exit(fail ? 1 : 0);

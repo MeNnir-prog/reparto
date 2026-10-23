@@ -1,0 +1,12 @@
+import fs from 'fs';
+import { detectGrid, analyzeTable, buildRows, markDuplicates, splitAddress } from '../logic.js';
+const [,, prefix] = process.argv;
+const { width, height, words } = JSON.parse(fs.readFileSync(prefix + '.json'));
+const gray = new Uint8Array(fs.readFileSync(prefix + '.gray'));
+const grid = detectGrid(gray, width, height);
+console.log('grid h', grid.h.length, 'v', grid.v.length, grid.v.map(Math.round));
+const a = analyzeTable(words, grid, { width, height });
+console.log('columns', a.columns.map(c => `${c.index}:${c.title}:${c.score.toFixed(2)}/${c.refShare.toFixed(2)} [${c.sample}]`));
+console.log('selected', a.selected);
+const rows = markDuplicates(buildRows(a, a.selected));
+for (const r of rows) console.log(JSON.stringify(r.text), r.conf, r.reasons.join(';'), 'dup', r.dupRows, 'sim', r.similarRows, '->', JSON.stringify(splitAddress(r.text)));

@@ -1,0 +1,5 @@
+# Capturas reales con datos de clientes (nombres, teléfonos, direcciones): nunca al repositorio
+tests/real/
+# Copia local del motor OCR (scripts/descargar-ocr.sh)
+vendor/
+node_modules/

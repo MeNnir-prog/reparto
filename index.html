@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b3d2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Reparto">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com blob: 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net https://tessdata.projectnaptha.com https://nominatim.openstreetmap.org https://router.project-osrm.org https: data: blob:; img-src 'self' data: blob: https://tile.openstreetmap.org https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; base-uri 'none'; form-action 'none'">
+  <title>Reparto · Reportes</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header id="topbar"></header>
+    <main id="view" tabindex="-1"></main>
+    <nav id="tabbar" aria-label="Secciones">
+      <button data-tab="route" class="tab"><span class="ti">🚚</span><span>Reparto</span></button>
+      <button data-tab="map" class="tab"><span class="ti">🗺️</span><span>Mapa</span></button>
+      <button data-tab="import" class="tab"><span class="ti">📥</span><span>Importar</span></button>
+      <button data-tab="history" class="tab"><span class="ti">🗂️</span><span>Historial</span><b class="badge" id="unsentBadge" hidden></b></button>
+      <button data-tab="settings" class="tab"><span class="ti">⚙️</span><span>Ajustes</span></button>
+    </nav>
+  </div>
+  <div id="modal" hidden></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>Esta aplicación necesita JavaScript.</noscript>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
