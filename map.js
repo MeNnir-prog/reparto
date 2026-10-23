@@ -125,9 +125,13 @@ export function currentPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('Este navegador no da la ubicación'));
     navigator.geolocation.getCurrentPosition(
-      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, label: 'Tu ubicación' }),
-      e => reject(new Error(e.code === 1 ? 'Permiso de ubicación denegado' : 'No se pudo obtener la ubicación')),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, label: 'Tu ubicación' }),
+      e => {
+        const err = new Error(e.code === 1 ? 'No diste permiso para usar tu ubicación.' : e.code === 3 ? 'La ubicación tardó demasiado (¿estás bajo techo?).' : 'No se pudo obtener tu ubicación.');
+        err.denied = e.code === 1;
+        reject(err);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
   });
 }
 

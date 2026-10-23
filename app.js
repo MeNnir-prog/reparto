@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -151,7 +151,7 @@ function render() {
   document.body.classList.toggle('hide-tabs', FORM_VIEWS.includes(S.view));
   document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === S.view));
   const views = { route: vRoute, map: vMap, detail: vDetail, deliver: vDeliver, fail: vFail, confirm: vConfirm, send: vSend, import: vImport, history: vHistory, settings: vSettings, help: vHelp };
-  if (S.view !== 'map' && MAP) { MAP.remove(); MAP = null; }
+  if (S.view !== 'map' && MAP) closeMap();
   (views[S.view] || vRoute)();
   updateBadge();
 }
@@ -193,8 +193,9 @@ function vRoute() {
     </section>
     ${r ? `<section class="card routecard">
         <div class="row" style="align-items:center"><div><div class="rc-title">🗺️ Ruta optimizada</div>
-          <div class="small muted">${r.count} paradas · ${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)}` : ''}</div></div>
+          <div class="small muted">${r.count} paradas · ${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)}` : ''} · ${routeFrom(r)}</div></div>
           <button class="btn small" style="flex:none" data-act="tab" data-tab="map">Ver mapa</button></div>
+        ${st.pending ? `<button class="btn small" style="width:100%;margin-top:10px" data-act="route-go">📍 Recalcular desde ${S.settings.startMode === 'gps' ? 'donde estoy' : 'el inicio'}</button>` : ''}
         ${next ? `<div class="next"><span class="muted small">Próxima parada</span>
           <button class="next-btn" data-act="open" data-id="${next.id}">${next.routeOrder != null ? `<span class="num">${next.routeOrder + 1}</span>` : ''}
           <span><b>${esc(next.address)}</b>${next.orderNo ? `<span class="small muted"> · #${esc(next.orderNo)}${next.company ? ' · ' + esc(next.company) : ''}</span>` : ''}</span></button>
@@ -258,7 +259,37 @@ function renderList() {
 }
 
 /* ================= Vista: Mapa y ruta ================= */
-let MAP = null;
+let MAP = null, GEO_WATCH = null, ME = null;
+
+function closeMap() {
+  if (GEO_WATCH != null) { navigator.geolocation.clearWatch(GEO_WATCH); GEO_WATCH = null; }
+  if (MAP) { MAP.remove(); MAP = null; }
+  ME = null;
+}
+
+/** Punto azul con tu ubicación, actualizado mientras el mapa está abierto. */
+function watchMe(L, map) {
+  if (!navigator.geolocation || S.settings.startMode !== 'gps') return;
+  const draw = pos => {
+    if (MAP !== map) return;
+    const ll = [pos.lat, pos.lng];
+    if (!ME) {
+      ME = {
+        acc: L.circle(ll, { radius: pos.acc || 30, color: '#1d6fd1', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map),
+        dot: L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me" title="Vos"></div>', iconSize: [20, 20], iconAnchor: [10, 10] }), zIndexOffset: 2000, interactive: false }).addTo(map)
+      };
+    } else { ME.dot.setLatLng(ll); ME.acc.setLatLng(ll).setRadius(pos.acc || 30); }
+  };
+  if (S.myPos) draw(S.myPos);
+  GEO_WATCH = navigator.geolocation.watchPosition(
+    p => { S.myPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, label: 'Tu ubicación' }; draw(S.myPos); },
+    () => {}, { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+}
+
+function routeFrom(r) {
+  if (!r?.start) return 'desde la primera parada';
+  return r.start.label === 'Tu ubicación' ? `desde tu ubicación (${fmtTime(r.at)})` : `desde ${esc(r.start.label)}`;
+}
 
 function vMap() {
   if (!S.day) {
@@ -273,7 +304,7 @@ function vMap() {
   const missing = pend.filter(i => i.lat == null && i.geo === 'fail');
   const approx = pend.filter(i => i.geo === 'approx');
   const pickIt = S.pick && itemById(S.pick);
-  setTop('Mapa y ruta', r ? `${r.count} paradas · ${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)} manejando` : ' (en línea recta)'}`
+  setTop('Mapa y ruta', r ? `${r.count} paradas · ${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)}` : ' (en línea recta)'} · ${routeFrom(r)}`
     : `${pend.length} pendientes · todavía sin ordenar`);
   $('#view').innerHTML = `
     ${pickIt ? `<div class="alert info pickbar">📍 Tocá en el mapa dónde queda <b>${esc(pickIt.address)}</b>
@@ -304,16 +335,27 @@ async function drawMap() {
   try { L = await (await import('./map.js')).loadLeaflet(); }
   catch (e) { box.innerHTML = `<div class="map-msg">${esc(e.message)}</div>`; return; }
   if (S.view !== 'map' || !$('#mapbox')) return;
-  if (MAP) { MAP.remove(); MAP = null; }
+  closeMap();
   const el = $('#mapbox'); el.innerHTML = '';
   const map = L.map(el, { zoomControl: true, attributionControl: true });
   MAP = map;
+  watchMe(L, map);
+  if (S.settings.startMode === 'gps' && navigator.geolocation) {
+    const b = document.createElement('button');
+    b.className = 'locbtn'; b.type = 'button'; b.title = 'Ir a mi ubicación'; b.setAttribute('aria-label', 'Ir a mi ubicación'); b.textContent = '◎';
+    L.DomEvent.disableClickPropagation(b);
+    b.onclick = () => {
+      if (S.myPos) map.setView([S.myPos.lat, S.myPos.lng], Math.max(map.getZoom(), 15));
+      else toast('Buscando tu ubicación… Si no aparece, revisá el permiso de ubicación de Safari.', 3500);
+    };
+    el.appendChild(b);
+  }
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
   const pts = [];
   const r = S.day.route;
   if (r?.geometry?.length) { L.polyline(r.geometry, { color: '#1f8a4c', weight: 5, opacity: 0.75 }).addTo(map); }
   if (r?.start) {
-    L.marker([r.start.lat, r.start.lng], { icon: L.divIcon({ className: '', html: '<div class="pin start" title="Inicio">▶</div>', iconSize: [30, 30], iconAnchor: [15, 15] }), zIndexOffset: -100 }).addTo(map);
+    L.marker([r.start.lat, r.start.lng], { icon: L.divIcon({ className: '', html: '<div class="pin start" title="Inicio de la ruta">▶</div>', iconSize: [30, 30], iconAnchor: [15, 15] }), zIndexOffset: -100 }).addTo(map);
     pts.push([r.start.lat, r.start.lng]);
   }
   for (const it of sortedItems()) {
@@ -359,6 +401,18 @@ async function placeManual(id, latlng) {
   S.mapSel = id; vMap();
 }
 
+/** Sin ubicación: explicar cómo activarla en el iPhone y dejar seguir sin ella. */
+function askNoGps(err) {
+  const fallback = S.settings.startAddress ? `desde <b>${esc(S.settings.startAddress)}</b>` : 'desde la parada que convenga';
+  return ask('No se pudo usar tu ubicación', `${esc(err.message)}<br><br>
+    ${err.denied ? `Para activarla en el iPhone:<ol class="steps small">
+      <li><b>Ajustes → Privacidad y seguridad → Localización</b>: activada.</li>
+      <li>Ahí mismo, <b>Sitios web de Safari</b> → <b>Al usar la app</b>, y <b>Ubicación exacta</b> activada.</li>
+      <li>Volvé a la app y tocá de nuevo <b>Armar ruta</b>. Si sigue sin preguntar: Ajustes → Safari → Ubicación → Preguntar.</li></ol>`
+      : 'Probá de nuevo al aire libre o con el GPS activado.'}
+    <br>¿Armar la ruta igual, ${fallback}?`, { ok: 'Armar igual', cancel: 'Cancelar' });
+}
+
 function setMapBusy(text) {
   S.mapBusy = text;
   const b = $('#mapBusy span:last-child');
@@ -379,11 +433,26 @@ async function buildRoute() {
   const M = await import('./map.js');
   const pend = S.items.filter(i => i.status === 'pending');
   try {
+    // La ubicación se pide primero (justo después de tocar el botón), no después de buscar todas las direcciones
+    let start = null;
+    const notes = [];
+    if (S.settings.startMode === 'gps') {
+      setMapBusy('Obteniendo tu ubicación…');
+      try { start = await M.currentPosition(); S.myPos = start; }
+      catch (e) {
+        S.mapBusy = null; if (S.view === 'map') vMap();
+        if (!(await askNoGps(e))) return;
+        setMapBusy('Buscando direcciones…');
+      }
+    }
     setMapBusy('Buscando direcciones…');
     // Reintentar las que fallaron antes solo si se corrigió la dirección (geo vuelve a null)
     const res = await M.geocodeItems(pend, S.settings.city || 'Montevideo', (i, n) => setMapBusy(`Buscando direcciones ${i} de ${n}…`));
-    setMapBusy(S.settings.startMode === 'gps' ? 'Obteniendo tu ubicación…' : 'Preparando el inicio…');
-    const { start, notes } = await M.resolveStart(S.settings);
+    if (!start && S.settings.startMode !== 'none' && S.settings.startAddress) {
+      setMapBusy('Buscando la dirección de partida…');
+      const r0 = await M.resolveStart({ ...S.settings, startMode: 'address' });
+      start = r0.start; notes.push(...r0.notes);
+    }
     const located = pend.filter(i => i.lat != null);
     if (!located.length) throw new Error('No se pudo ubicar ninguna dirección. Revisá la ciudad en Ajustes o corregí las direcciones.');
     setMapBusy('Calculando el mejor recorrido…');

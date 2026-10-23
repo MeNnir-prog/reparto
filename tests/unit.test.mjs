@@ -122,6 +122,15 @@ test('ruta: el orden no da vueltas de más', () => {
   assert.deepEqual(L.optimizeOrder(pts, p(0)).map(i => pts[i]), [p(1), p(2), p(3), p(4)]);
 });
 
+test('ruta: no deja para el final paradas que están junto al inicio', () => {
+  // Inicio en 0; paradas cerca (1,2) y lejos (10..13). El vecino más cercano de cada paso
+  // no alcanza: lo correcto es 1,2 y después ir hacia lo lejano.
+  const p = x => ({ lat: -34.9, lng: -56.2 + x * 0.01 });
+  const pts = [p(10), p(11), p(12), p(13), p(1), p(2)];
+  const ord = L.optimizeOrder(pts, p(0)).map(i => pts[i].lng);
+  assert.deepEqual(ord, [p(1), p(2), p(10), p(11), p(12), p(13)].map(q => q.lng));
+});
+
 test('texto pegado con número de pedido', () => {
   const r = L.rowsFromText('#1162 Missouri 1504, Montevideo');
   assert.equal(r[0].orderNo, '1162');

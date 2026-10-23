@@ -811,15 +811,34 @@ export function orderByCost(n, hasStart, cost) {
     const o = nearest(s), c = pathCost(o);
     if (c < bestCost) { bestCost = c; order = o; }
   }
-  // 2-opt: invertir tramos mientras mejore (se recalcula el costo completo porque puede ser asimétrico)
+  // Mejoras mientras haya (se recalcula el costo completo porque puede ser asimétrico):
+  //  - 2-opt: invertir un tramo.
+  //  - Or-opt: sacar un grupo de paradas seguidas y ponerlo en otro lugar (derecho o invertido),
+  //    p. ej. las paradas cerca del inicio que quedaron para el final.
+  const m = order.length;
+  const maxSeg = Math.min(m - 1, 12);
   let improved = true, guard = 0;
   while (improved && guard++ < 30) {
     improved = false;
-    for (let i = 0; i < order.length - 1; i++) {
-      for (let k = i + 1; k < order.length; k++) {
+    for (let i = 0; i < m - 1; i++) {
+      for (let k = i + 1; k < m; k++) {
         const cand = [...order.slice(0, i), ...order.slice(i, k + 1).reverse(), ...order.slice(k + 1)];
         const c = pathCost(cand);
         if (c < bestCost - 1e-6) { order = cand; bestCost = c; improved = true; }
+      }
+    }
+    for (let len = 1; len <= maxSeg; len++) {
+      for (let i = 0; i + len <= m; i++) {
+        const seg = order.slice(i, i + len);
+        const rest = [...order.slice(0, i), ...order.slice(i + len)];
+        for (let p = 0; p <= rest.length; p++) {
+          if (p === i) continue;
+          for (const s of [seg, seg.slice().reverse()]) {
+            const cand = [...rest.slice(0, p), ...s, ...rest.slice(p)];
+            const c = pathCost(cand);
+            if (c < bestCost - 1e-6) { order = cand; bestCost = c; improved = true; }
+          }
+        }
       }
     }
   }

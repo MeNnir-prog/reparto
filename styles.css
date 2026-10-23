@@ -168,6 +168,8 @@ h3 { font-size: 17px; margin: 14px 0 6px; }
 .pin.sel { transform: scale(1.25); background: #f0a020; }
 .pin.start { background: #1d6fd1; font-size: 12px; }
 .selcard { margin-top: 10px; }
+.me { width: 18px; height: 18px; border-radius: 50%; background: #1d6fd1; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(29, 111, 209, .35), 0 2px 6px rgba(0, 0, 0, .35); }
+.locbtn { position: absolute; right: 10px; bottom: 28px; z-index: 1000; width: 44px; height: 44px; border-radius: 12px; border: 0; background: #fff; color: #1d6fd1; font-size: 24px; line-height: 1; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); cursor: pointer; }
 .leaflet-container { font: inherit; }
 
 #modal { position: fixed; inset: 0; z-index: 1200; background: rgba(0, 0, 0, .45); display: flex; align-items: flex-end; justify-content: center; }
