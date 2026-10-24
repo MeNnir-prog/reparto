@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -1050,6 +1050,7 @@ function vImport() {
       <input type="file" id="imp-gal" class="hidden-input" accept="image/*" multiple>
       <input type="file" id="imp-cam" class="hidden-input" accept="image/*" capture="environment">
       <div class="small muted">El reconocimiento se hace en este teléfono: las capturas no se suben a ningún servidor. La primera vez descarga el motor de lectura (~15&nbsp;MB).</div>
+      <button class="btn" data-act="imp-link">🔗 Pegar link de ruta</button>
       <label class="btn" for="imp-shared">📂 Abrir ruta compartida (archivo .json)</label>
       <input type="file" id="imp-shared" class="hidden-input" accept=".json,application/json">
     </div>
@@ -1214,29 +1215,146 @@ function downloadFile(file) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+/* ---- Link con la ruta adentro ----
+ * La ruta va comprimida después de "#r=". Lo que está después de "#" no viaja al servidor
+ * (ni a GitHub): solo lo lee la app en el teléfono que abre el link.
+ * Quien tenga el link puede ver las paradas (pedido, empresa, dirección, barrio), como con el texto.
+ */
+const GEO_CODES = [null, 'exact', 'approx', 'manual', 'fail'];
+
+function b64url(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function unb64url(str) {
+  const s = atob(str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+const pipeBytes = (bytes, stream) => new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer().then(b => new Uint8Array(b));
+
+async function routeLink(day, items) {
+  const rows = items.slice().sort((a, b) => a.order - b.order).map(it => [
+    it.orderNo || '', it.company || '', it.zone || '', it.address || '', it.refs || '',
+    it.lat != null ? Math.round(it.lat * 1e5) / 1e5 : null, it.lng != null ? Math.round(it.lng * 1e5) / 1e5 : null,
+    Math.max(0, GEO_CODES.indexOf(it.geo ?? null)), it.routeOrder ?? null
+  ]);
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, c: day.createdAt, d: day.date, s: rows }));
+  let tag = 'j', out = bytes;
+  if (typeof CompressionStream !== 'undefined') {
+    try { out = await pipeBytes(bytes, new CompressionStream('deflate-raw')); tag = 'z'; } catch { out = bytes; tag = 'j'; }
+  }
+  return new URL(`./#r=${tag}${b64url(out)}`, location.href).href;
+}
+
+/** Del link (o de un texto que lo contenga) a { createdAt, date, items }. Lanza error si está roto. */
+async function parseRouteLink(text) {
+  const m = String(text || '').match(/#r=([jz])([A-Za-z0-9_-]+)/);
+  if (!m) throw new Error('No es un link de ruta');
+  let bytes = unb64url(m[2]);
+  if (m[1] === 'z') {
+    if (typeof DecompressionStream === 'undefined') throw new Error('Este teléfono necesita iOS 16.4 o más nuevo para abrir el link');
+    bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+  }
+  const p = JSON.parse(new TextDecoder().decode(bytes));
+  if (p?.v !== 1 || !Array.isArray(p.s)) throw new Error('Link de ruta no válido');
+  return {
+    createdAt: p.c, date: p.d,
+    items: p.s.map((r, i) => ({ order: i, orderNo: r[0], company: r[1], zone: r[2], address: r[3], refs: r[4], lat: r[5], lng: r[6], geo: GEO_CODES[r[7]] || null, routeOrder: r[8] }))
+  };
+}
+
 async function shareRoute(id) {
   const day = await DB.getDay(id); if (!day) return;
   const items = await DB.itemsOfDay(id);
   // Se arma todo antes de mostrar las opciones: iOS solo deja compartir justo después de un toque.
   const text = routeText(day, items);
-  const file = routeFile(day, items);
-  const canFile = canShareFiles(file);
+  const link = await routeLink(day, items);
+  const title = `Ruta ${routeTitle(day)}`;
+  const msg = `🗓️ ${title} — ${items.length} paradas. Tocá el link para cargarla en la app:`;
   openModal(`<h2>Compartir ruta</h2><div class="small muted">🗓️ ${routeTitle(day)} · ${items.length} paradas</div>
     <div class="stack" style="margin-top:14px">
-      <button class="btn primary" id="sh-text">📝 Como texto (WhatsApp, mensajes…)</button>
-      <div class="small muted">La lista de paradas en orden: pedido, empresa, dirección y barrio.</div>
-      <button class="btn" id="sh-file">📲 A otro teléfono con la app</button>
-      <div class="small muted">Manda un archivo; en el otro teléfono: Importar → “Abrir ruta compartida”. No incluye cédulas, fotos ni reportes.</div>
+      <button class="btn primary" id="sh-link">🔗 Enviar link de la ruta</button>
+      <div class="small muted">Quien lo abra puede cargar la misma ruta en su app, con las paradas ubicadas y en orden. Lleva pedido, empresa, dirección y barrio; no cédulas, fotos ni reportes.</div>
+      <button class="btn" id="sh-copy">📋 Copiar link</button>
+      <button class="btn" id="sh-text">📝 Enviar como lista de texto</button>
       <button class="btn link" id="sh-no">Cancelar</button></div>`);
   $('#sh-no').onclick = closeModal;
+  $('#sh-link').onclick = () => {
+    if (navigator.share) {
+      navigator.share({ title, text: msg, url: link }).then(closeModal, err => {
+        if (err.name !== 'AbortError') copyText(link).then(() => { closeModal(); toast('📋 Link copiado: pegalo en WhatsApp'); });
+      });
+    } else copyText(link).then(ok => { closeModal(); toast(ok === false ? 'No se pudo copiar' : '📋 Link copiado: pegalo en WhatsApp'); });
+  };
+  $('#sh-copy').onclick = () => copyText(link).then(ok => { closeModal(); toast(ok === false ? 'No se pudo copiar' : '📋 Link de la ruta copiado'); });
   $('#sh-text').onclick = () => {
     if (navigator.share) {
-      navigator.share({ title: `Ruta ${routeTitle(day)}`, text }).then(closeModal, err => { if (err.name !== 'AbortError') copyText(text).then(() => toast('📋 Lista copiada')); });
+      navigator.share({ title, text }).then(closeModal, err => { if (err.name !== 'AbortError') copyText(text).then(() => toast('📋 Lista copiada')); });
     } else copyText(text).then(ok => { closeModal(); toast(ok === false ? 'No se pudo copiar' : '📋 Lista copiada: pegala donde quieras'); });
   };
-  $('#sh-file').onclick = () => {
-    if (canFile) navigator.share({ files: [file], title: `Ruta ${routeTitle(day)}` }).then(closeModal, err => { if (err.name !== 'AbortError') { downloadFile(file); closeModal(); } });
-    else { downloadFile(file); closeModal(); toast('Archivo de la ruta descargado'); }
+}
+
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+/** Muestra la ruta recibida y la agrega con un toque. */
+async function offerSharedRoute(data, link) {
+  const items = data.items.filter(x => x && cleanSpaces(x.address));
+  if (!items.length) return toast('La ruta compartida no tiene paradas', 4000);
+  const days = await DB.listDays();
+  const dup = days.find(d => d.sharedFrom && d.sharedFrom === data.createdAt);
+  const co = companiesOf(items);
+  const located = items.filter(i => Number.isFinite(i.lat)).length;
+  // En iPhone, un link abierto desde WhatsApp se abre en Safari, que guarda sus datos aparte de la app del ícono.
+  const safariNote = link && isIOS && !isStandalone() ? `<div class="alert info small" style="margin-top:10px">
+      Si usás Reparto desde el <b>ícono de inicio</b>: este link se abrió en Safari, que guarda las rutas aparte.
+      Tocá <b>Copiar link</b>, abrí Reparto desde el ícono → <b>Importar → Pegar link de ruta</b>.</div>` : '';
+  openModal(`<h2>📦 Te compartieron una ruta</h2>
+    <div class="card" style="box-shadow:none;background:var(--soft2)">
+      <div style="font-weight:700">🗓️ Creada ${data.createdAt ? fmtDateTime(data.createdAt) : ''}</div>
+      <div style="margin-top:4px"><b>${items.length}</b> paradas${located ? ` · ${located} ubicadas en el mapa` : ''}</div>
+      ${co ? `<div class="small muted">${esc(co)}</div>` : ''}
+      <ol class="steps small" style="margin-top:6px">${items.slice().sort((a, b) => (a.routeOrder ?? 1e6) - (b.routeOrder ?? 1e6) || a.order - b.order).slice(0, 4).map(i => `<li>${i.orderNo ? `#${esc(i.orderNo)} · ` : ''}${esc(i.address)}</li>`).join('')}${items.length > 4 ? `<li class="muted">y ${items.length - 4} más…</li>` : ''}</ol>
+    </div>
+    ${dup ? `<div class="alert warn small" style="margin-top:10px">Ya tenés esta ruta (recibida ${fmtDateTime(dup.createdAt)}).</div>` : ''}
+    ${safariNote}
+    <div class="stack" style="margin-top:14px">
+      <button class="btn ok big" id="rl-add">＋ Agregar a mis rutas</button>
+      ${dup ? `<button class="btn" id="rl-open">Abrir la que ya tengo</button>` : ''}
+      ${link ? `<button class="btn" id="rl-copy">📋 Copiar link</button>` : ''}
+      <button class="btn link" id="rl-no">Cancelar</button></div>`);
+  $('#rl-no').onclick = closeModal;
+  $('#rl-add').onclick = () => { closeModal(); importSharedData(data); };
+  if (dup) $('#rl-open').onclick = async () => { closeModal(); await DB.setMeta('activeDayId', dup.id); await loadActiveDay(); go('route'); };
+  if (link) $('#rl-copy').onclick = () => copyText(link).then(ok => toast(ok === false ? 'No se pudo copiar' : '📋 Link copiado'));
+}
+
+/** Al abrir la app con un link de ruta: se saca la ruta de la URL y se ofrece agregarla. */
+async function handleRouteLink() {
+  if (!/^#r=/.test(location.hash)) return;
+  const link = location.href;
+  history.replaceState(history.state, '', location.pathname + location.search);
+  try { offerSharedRoute(await parseRouteLink(link), link); }
+  catch (e) { toast(e.message === 'Link de ruta no válido' || e.name === 'SyntaxError' ? 'El link de la ruta está incompleto o dañado' : e.message, 5000); }
+}
+window.addEventListener('hashchange', handleRouteLink);
+
+function pasteRouteLink() {
+  openModal(`<h2>🔗 Pegar link de ruta</h2>
+    <div class="small muted">Copiá el link que te mandaron (mantené apretado el mensaje → Copiar) y pegalo acá.</div>
+    <label class="field"><textarea id="rl-text" rows="3" placeholder="https://…/reparto/#r=…" autocomplete="off" autocorrect="off" spellcheck="false"></textarea></label>
+    <div class="stack" style="margin-top:10px">
+      ${navigator.clipboard?.readText ? '<button class="btn" id="rl-paste">📋 Pegar del portapapeles</button>' : ''}
+      <button class="btn primary" id="rl-go">Ver la ruta</button>
+      <button class="btn link" id="rl-cancel">Cancelar</button></div>`);
+  $('#rl-cancel').onclick = closeModal;
+  if ($('#rl-paste')) $('#rl-paste').onclick = () => navigator.clipboard.readText().then(t => { $('#rl-text').value = t; }, () => toast('No se pudo leer el portapapeles: pegalo a mano'));
+  $('#rl-go').onclick = async () => {
+    try { const data = await parseRouteLink($('#rl-text').value); offerSharedRoute(data, null); }
+    catch (e) { toast(e.message === 'No es un link de ruta' ? 'Eso no parece un link de ruta' : 'El link está incompleto o dañado', 4000); }
   };
 }
 
@@ -1244,6 +1362,10 @@ async function importSharedFile(f) {
   let data;
   try { data = JSON.parse(await f.text()); } catch { return toast('Ese archivo no es una ruta de la app', 4000); }
   if (data?.app !== 'reparto' || data.type !== 'ruta' || !Array.isArray(data.items)) return toast('Ese archivo no es una ruta de la app', 4000);
+  return importSharedData(data);
+}
+
+async function importSharedData(data) {
   const day = { id: DB.uid(), date: todayISO(), createdAt: Date.now(), shared: true, sharedFrom: data.createdAt || null };
   const items = data.items.filter(x => x && cleanSpaces(x.address)).map((x, i) => ({
     id: DB.uid(), dayId: day.id, order: Number.isFinite(x.order) ? x.order : i,
@@ -1528,6 +1650,7 @@ document.addEventListener('click', async e => {
       if (S.day?.id !== id) { await DB.setMeta('activeDayId', id); await loadActiveDay(); S.filter = 'pending'; S.query = ''; S.mapSel = null; S.pick = null; }
       go('route'); break;
     case 'day-share': shareRoute(id); break;
+    case 'imp-link': pasteRouteLink(); break;
     case 'day-split': splitRoute(id); break;
     case 'day-del': {
       const d = await DB.getDay(id); if (!d) break;
@@ -1596,6 +1719,7 @@ async function init() {
     render();
     const aid = await DB.getMeta('awaitingId');
     if (aid && itemById(aid)?.sendStatus === 'awaiting') askSentModal(itemById(aid));
+    else await handleRouteLink();
   } catch (e) {
     $('#view').innerHTML = `<div class="alert bad">No se pudo abrir el almacenamiento local: ${esc(e.message)}. Si usás Safari en modo privado, abrila en modo normal.</div>`;
   }
@@ -1606,4 +1730,4 @@ async function init() {
 init();
 
 // Exponer para pruebas automáticas
-window.__app = { S, DB, render, go, routeText, routeFile, importSharedFile };
+window.__app = { S, DB, render, go, routeText, routeFile, importSharedFile, routeLink, parseRouteLink };

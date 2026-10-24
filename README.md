@@ -159,7 +159,10 @@ La cédula se acepta con o sin puntos/guion y se envía como `1234567-8`. Se val
 - **Dónde están los datos**: solo en el iPhone, en el almacenamiento de la app (IndexedDB). No hay servidor ni cuentas. Ni la app ni el hosting reciben direcciones, cédulas ni fotos.
 - **Conservación**: las jornadas se borran solas a los 7 días (configurable: 1–30). Historial → *Borrar* jornada; Ajustes → *Borrar TODOS los datos*. Al pasar un reporte a "Entregado" o cambiar la foto, la foto anterior se borra.
 - **Fotos**: se reducen a 1600 px y se re-codifican, lo que elimina los metadatos EXIF (incluida la ubicación GPS). Nunca se suben ni se generan enlaces públicos: viajan solo dentro de WhatsApp, cuando el usuario comparte.
-- **URLs**: la app nunca pone datos en su propia URL. El único enlace con datos es el que se entrega a WhatsApp (`whatsapp://`, local).
+- **URLs**: la app no pone datos en su URL mientras se usa. Hay dos enlaces con datos, y los dos se arman solo cuando el usuario lo pide:
+  - El que se entrega a WhatsApp (`whatsapp://`, local).
+  - El **link para compartir una ruta** (Rutas → Compartir → Enviar link). Lleva las paradas (pedido, empresa, dirección, barrio, ubicación y orden; nunca cédulas, fotos ni reportes) comprimidas después de `#r=`. Lo que va después de `#` no se envía a ningún servidor, ni a GitHub. Pero **quien tenga el link puede ver esas paradas**, igual que con la lista en texto. Al abrirlo, la app saca los datos de la barra de direcciones.
+  - En iPhone, un link abierto desde WhatsApp se abre en Safari, que guarda sus datos aparte de la app del ícono: para cargarla en la app, Copiar link → abrir Reparto desde el ícono → Importar → Pegar link de ruta.
 - **Sin logs** con cédulas. Sin secretos en el código. El token de Meta (opcional) vive solo en el Worker.
 - **Terceros**: el motor OCR se descarga de cdn.jsdelivr.net (versión fija 5.1.1). Para no depender de él, ejecutar `scripts/descargar-ocr.sh` y volver a publicar: la app usa la copia local automáticamente.
 - **Limitaciones del almacenamiento local en iPhone**:
