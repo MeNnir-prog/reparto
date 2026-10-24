@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -267,23 +267,82 @@ function closeMap() {
   ME = null;
 }
 
-/** Punto azul con tu ubicación, actualizado mientras el mapa está abierto. */
+/** Cartel sobre el mapa con el estado de tu ubicación (vacío = se oculta). */
+function setLocMsg(text, help = false) {
+  const el = $('#locmsg'); if (!el) return;
+  el.hidden = !text;
+  el.innerHTML = text ? `${esc(text)}${help ? ' <b>Cómo activarla</b>' : ''}` : '';
+  el.dataset.help = help ? '1' : '';
+}
+
+function gpsErrorText(e) {
+  return e.code === 1 ? 'Sin permiso para usar tu ubicación.' : e.code === 3 ? 'Buscando señal de GPS…' : 'No se pudo obtener tu ubicación.';
+}
+
+function showGpsHelp() {
+  ask('Activar la ubicación', `En el iPhone:<ol class="steps small">
+    <li><b>Ajustes → Privacidad y seguridad → Localización</b>: activada.</li>
+    <li>Ahí mismo, <b>Sitios web de Safari</b> → <b>Al usar la app</b>, con <b>Ubicación exacta</b> activada.</li>
+    <li>Si sigue sin preguntar: <b>Ajustes → Apps → Safari → Ubicación → Preguntar</b>.</li>
+    <li>Cerrá la app del todo, abrila de nuevo y tocá <b>◎</b> en el mapa.</li></ol>`, { ok: 'Entendido', cancel: 'Cerrar' });
+}
+
+/**
+ * Punto azul con tu ubicación, actualizado mientras el mapa está abierto.
+ * La primera vez que aparece, el mapa se acomoda para que se vea (sin perder las paradas).
+ */
 function watchMe(L, map) {
-  if (!navigator.geolocation || S.settings.startMode !== 'gps') return;
+  if (!navigator.geolocation) { setLocMsg('Este navegador no da la ubicación.'); return; }
+  let first = true;
   const draw = pos => {
     if (MAP !== map) return;
     const ll = [pos.lat, pos.lng];
     if (!ME) {
       ME = {
-        acc: L.circle(ll, { radius: pos.acc || 30, color: '#1d6fd1', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map),
+        acc: L.circle(ll, { radius: Math.min(pos.acc || 30, 500), color: '#1d6fd1', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map),
         dot: L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me" title="Vos"></div>', iconSize: [20, 20], iconAnchor: [10, 10] }), zIndexOffset: 2000, interactive: false }).addTo(map)
       };
-    } else { ME.dot.setLatLng(ll); ME.acc.setLatLng(ll).setRadius(pos.acc || 30); }
+    } else { ME.dot.setLatLng(ll); ME.acc.setLatLng(ll).setRadius(Math.min(pos.acc || 30, 500)); }
+    setLocMsg('');
+    if (first) {
+      first = false;
+      if (S.pick) return; // no mover el mapa mientras se marca una parada a mano
+      const stops = sortedItems().filter(i => i.lat != null).map(i => [i.lat, i.lng]);
+      if (!stops.length) map.setView(ll, 15);
+      else if (!map.getBounds().pad(-0.05).contains(ll)) map.fitBounds([...stops, ll], { padding: [28, 28], maxZoom: 16 });
+    }
   };
   if (S.myPos) draw(S.myPos);
+  else setLocMsg('Buscando tu ubicación…');
   GEO_WATCH = navigator.geolocation.watchPosition(
     p => { S.myPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, label: 'Tu ubicación' }; draw(S.myPos); },
-    () => {}, { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+    e => { if (!S.myPos) setLocMsg(gpsErrorText(e), e.code === 1); },
+    { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 });
+}
+
+/** Botón ◎: centra en vos; si todavía no hay ubicación, la pide (un toque cuenta como permiso). */
+async function locateMe() {
+  if (!MAP) return;
+  if (S.myPos) { MAP.setView([S.myPos.lat, S.myPos.lng], Math.max(MAP.getZoom(), 16)); return; }
+  setLocMsg('Buscando tu ubicación…');
+  try {
+    const M = await import('./map.js');
+    S.myPos = await M.currentPosition();
+    if (!MAP) return;
+    const L = window.L;
+    if (!ME) {
+      // el watch todavía no dibujó: lo dibujamos ya
+      ME = {
+        acc: L.circle([S.myPos.lat, S.myPos.lng], { radius: Math.min(S.myPos.acc || 30, 500), color: '#1d6fd1', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(MAP),
+        dot: L.marker([S.myPos.lat, S.myPos.lng], { icon: L.divIcon({ className: '', html: '<div class="me" title="Vos"></div>', iconSize: [20, 20], iconAnchor: [10, 10] }), zIndexOffset: 2000, interactive: false }).addTo(MAP)
+      };
+    }
+    setLocMsg('');
+    MAP.setView([S.myPos.lat, S.myPos.lng], 16);
+  } catch (e) {
+    setLocMsg(e.message, !!e.denied);
+    if (e.denied) showGpsHelp();
+  }
 }
 
 function routeFrom(r) {
@@ -293,10 +352,12 @@ function routeFrom(r) {
 
 function vMap() {
   if (!S.day) {
-    setTop('Mapa');
-    $('#view').innerHTML = `<div class="empty"><div class="big">🗺️</div><h2>No hay jornada cargada</h2>
-      <p class="muted">Importá la lista del día para armar la ruta.</p></div>
-      <button class="btn primary big" data-act="tab" data-tab="import">📥 Importar lista del día</button>`;
+    setTop('Mapa', 'Tu ubicación');
+    $('#view').innerHTML = `<div id="mapbox" class="mapbox"><div class="map-msg"><span class="spinner"></span> Cargando mapa…</div></div>
+      <div class="card" style="margin-top:12px"><b>No hay jornada cargada</b>
+      <p class="small muted" style="margin:4px 0 10px">Importá la lista del día para ver las paradas y armar la ruta.</p>
+      <button class="btn primary" data-act="tab" data-tab="import">📥 Importar lista del día</button></div>`;
+    drawMap();
     return;
   }
   const r = S.day.route;
@@ -339,20 +400,19 @@ async function drawMap() {
   const el = $('#mapbox'); el.innerHTML = '';
   const map = L.map(el, { zoomControl: true, attributionControl: true });
   MAP = map;
-  watchMe(L, map);
-  if (S.settings.startMode === 'gps' && navigator.geolocation) {
-    const b = document.createElement('button');
-    b.className = 'locbtn'; b.type = 'button'; b.title = 'Ir a mi ubicación'; b.setAttribute('aria-label', 'Ir a mi ubicación'); b.textContent = '◎';
-    L.DomEvent.disableClickPropagation(b);
-    b.onclick = () => {
-      if (S.myPos) map.setView([S.myPos.lat, S.myPos.lng], Math.max(map.getZoom(), 15));
-      else toast('Buscando tu ubicación… Si no aparece, revisá el permiso de ubicación de Safari.', 3500);
-    };
-    el.appendChild(b);
-  }
+  const b = document.createElement('button');
+  b.className = 'locbtn'; b.type = 'button'; b.title = 'Ir a mi ubicación'; b.setAttribute('aria-label', 'Ir a mi ubicación'); b.textContent = '◎';
+  L.DomEvent.disableClickPropagation(b);
+  b.onclick = locateMe;
+  el.appendChild(b);
+  const msg = document.createElement('div');
+  msg.id = 'locmsg'; msg.className = 'locmsg'; msg.hidden = true;
+  L.DomEvent.disableClickPropagation(msg);
+  msg.onclick = () => { if (msg.dataset.help) showGpsHelp(); };
+  el.appendChild(msg);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
   const pts = [];
-  const r = S.day.route;
+  const r = S.day?.route;
   if (r?.geometry?.length) { L.polyline(r.geometry, { color: '#1f8a4c', weight: 5, opacity: 0.75 }).addTo(map); }
   if (r?.start) {
     L.marker([r.start.lat, r.start.lng], { icon: L.divIcon({ className: '', html: '<div class="pin start" title="Inicio de la ruta">▶</div>', iconSize: [30, 30], iconAnchor: [15, 15] }), zIndexOffset: -100 }).addTo(map);
@@ -370,7 +430,9 @@ async function drawMap() {
     pts.push([it.lat, it.lng]);
   }
   if (pts.length) map.fitBounds(pts, { padding: [28, 28], maxZoom: 16 });
+  else if (S.myPos) map.setView([S.myPos.lat, S.myPos.lng], 15);
   else map.setView([-34.88, -56.16], 12);
+  watchMe(L, map);
   if (S.pick) {
     el.classList.add('picking');
     map.once('click', e => placeManual(S.pick, e.latlng));
