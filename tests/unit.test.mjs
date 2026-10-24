@@ -17,13 +17,13 @@ test('cédula: formatos aceptados y dígito verificador', () => {
 });
 
 test('mensaje de entrega: formato exacto', () => {
-  assert.equal(L.buildDeliveredMessage({ pkg: '#1567', address: '8 de octubre', cedula: '4567890-3' }), '#1567\n8 de octubre\n4567890-3');
-  assert.equal(L.buildDeliveredMessage({ pkg: '1162', company: 'Aquora', address: 'Avenida Italia 4102', cedula: '1234567-2' }), '#1162\nAquora\nAvenida Italia 4102\n1234567-2');
+  assert.equal(L.buildDeliveredMessage({ pkg: '1162', company: 'Aquora', cedula: '1234567-2' }), '#1162\nAquora\n1234567-2');
+  assert.equal(L.buildDeliveredMessage({ pkg: '#1567', cedula: '4567890-3' }), '#1567\n4567890-3'); // sin empresa
 });
 
 test('mensaje de no entrega: refleja el motivo elegido', () => {
-  assert.equal(L.buildFailedMessage({ pkg: '1567', address: '8 de octubre', reasonCode: 'ausente' }), '#1567\n8 de octubre\nNo se entregó porque el cliente no estaba en casa.');
-  assert.match(L.buildFailedMessage({ pkg: '1', address: 'x 1', reasonCode: 'rechaza' }), /rechazó el paquete\.$/);
+  assert.equal(L.buildFailedMessage({ pkg: '1567', company: 'Nova', reasonCode: 'ausente' }), '#1567\nNova\nNo se entregó porque el cliente no estaba en casa.');
+  assert.match(L.buildFailedMessage({ pkg: '1', reasonCode: 'rechaza' }), /^#1\nNo se entregó porque el cliente rechazó el paquete\.$/);
   assert.equal(L.reasonSentence('otro', 'El portero no dejó entrar'), 'No se entregó porque el portero no dejó entrar.');
   assert.equal(L.reasonSentence('otro', 'no se entregó por lluvia fuerte'), 'No se entregó por lluvia fuerte.');
   assert.equal(L.reasonSentence('otro', '   '), '');

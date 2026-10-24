@@ -170,13 +170,16 @@ export function reasonSentence(code, otherText) {
   return t;
 }
 
-/** "#1162\nAquora\nAvenida Italia 4102\n1234567-2" (sin empresa, la línea no va). */
-export function buildDeliveredMessage({ pkg, company, address, cedula }) {
-  return [`#${cleanPackage(pkg)}`, cleanSpaces(company), cleanSpaces(address), cedula].filter(Boolean).join('\n');
+// Los reportes llevan pedido y empresa; la dirección no va (sin empresa, esa línea no va).
+
+/** "#1162\nAquora\n1234567-2" */
+export function buildDeliveredMessage({ pkg, company, cedula }) {
+  return [`#${cleanPackage(pkg)}`, cleanSpaces(company), cedula].filter(Boolean).join('\n');
 }
 
-export function buildFailedMessage({ pkg, address, reasonCode, reasonText }) {
-  return `#${cleanPackage(pkg)}\n${cleanSpaces(address)}\n${reasonSentence(reasonCode, reasonText)}`;
+/** "#1162\nAquora\nNo se entregó porque el cliente no estaba en casa." */
+export function buildFailedMessage({ pkg, company, reasonCode, reasonText }) {
+  return [`#${cleanPackage(pkg)}`, cleanSpaces(company), reasonSentence(reasonCode, reasonText)].filter(Boolean).join('\n');
 }
 
 /* ---------------- Teléfono y enlaces WhatsApp ---------------- */

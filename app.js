@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -836,8 +836,8 @@ async function vConfirm() {
   if (!it) return go('route', {}, true);
   const addr = fullAddress(it);
   const ci = d.type === 'delivered' ? parseCedula(d.cedula) : null;
-  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, company: it.company, address: addr, cedula: ci.formatted })
-    : buildFailedMessage({ pkg: d.pkg, address: addr, reasonCode: d.reasonCode, reasonText: d.reasonText });
+  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, company: it.company, cedula: ci.formatted })
+    : buildFailedMessage({ pkg: d.pkg, company: it.company, reasonCode: d.reasonCode, reasonText: d.reasonText });
   const conflicts = findPackageConflicts(S.items, d.pkg, it.id);
   const ph = d.photoId ? await photoUrl(d.photoId) : '';
   const warn = [];
@@ -849,8 +849,9 @@ async function vConfirm() {
     ${warn.map(w => `<div class="alert warn" style="margin-bottom:8px">${w}</div>`).join('')}
     <div class="card"><dl class="kv">
       <dt>Tipo</dt><dd>${d.type === 'delivered' ? '<span class="pill ok">✅ Entregado</span>' : '<span class="pill bad">❌ No entregado</span>'}</dd>
-      <dt>Paquete</dt><dd class="mono" style="font-size:22px">#${esc(d.pkg)}</dd>
-      <dt>Dirección</dt><dd>${esc(addr)}</dd>
+      <dt>Pedido</dt><dd class="mono" style="font-size:22px">#${esc(d.pkg)}</dd>
+      <dt>Empresa</dt><dd>${it.company ? esc(it.company) : '<span class="muted">—</span>'}</dd>
+      <dt>Dirección</dt><dd>${esc(addr)} <div class="small muted">(no va en el mensaje)</div></dd>
       ${d.type === 'delivered' ? `<dt>Cédula</dt><dd class="mono" style="font-size:22px">${esc(ci.formatted)}</dd>` :
         `<dt>Motivo</dt><dd>${esc(reasonSentence(d.reasonCode, d.reasonText))}</dd><dt>Foto</dt><dd>${ph ? 'Sí' : '<span style="color:var(--bad)">Sin foto</span>'}</dd>`}
     </dl>${ph ? `<img class="photo" src="${ph}" alt="Foto" style="margin-top:10px">` : ''}</div>
@@ -862,7 +863,6 @@ async function vConfirm() {
 
 async function commitReport(force) {
   const d = S.draft; const it = itemById(d.itemId); if (!it) return;
-  const addr = fullAddress(it);
   if (!force && findPackageConflicts(S.items, d.pkg, it.id).length) {
     const ok = await ask('Número de paquete repetido', `El #${esc(d.pkg)} ya figura en otro reporte. ¿Seguro que es correcto?`, { ok: 'Sí, es correcto', cancel: 'Revisar' });
     if (!ok) return;
@@ -871,10 +871,10 @@ async function commitReport(force) {
   if (d.type === 'delivered') {
     const ci = parseCedula(d.cedula);
     Object.assign(it, { status: 'delivered', pkg: d.pkg, cedula: ci.formatted, reasonCode: '', reasonText: '', photoId: null });
-    it.message = buildDeliveredMessage({ pkg: d.pkg, company: it.company, address: addr, cedula: ci.formatted });
+    it.message = buildDeliveredMessage({ pkg: d.pkg, company: it.company, cedula: ci.formatted });
   } else {
     Object.assign(it, { status: 'failed', pkg: d.pkg, cedula: '', reasonCode: d.reasonCode, reasonText: d.reasonCode === 'otro' ? cleanSpaces(d.reasonText) : '', photoId: d.photoId || null });
-    it.message = buildFailedMessage({ pkg: d.pkg, address: addr, reasonCode: d.reasonCode, reasonText: d.reasonText });
+    it.message = buildFailedMessage({ pkg: d.pkg, company: it.company, reasonCode: d.reasonCode, reasonText: d.reasonText });
   }
   // Minimizar datos: si cambió la foto o pasó a entregado, borrar la foto anterior
   if (prevPhoto && prevPhoto !== it.photoId) { await DB.deletePhoto(prevPhoto); S.photoUrls.delete(prevPhoto); }
@@ -1612,11 +1612,12 @@ document.addEventListener('click', async e => {
         // Si cambió la calle o el barrio, hay que volver a ubicarla en el mapa (salvo que se haya marcado a mano)
         if ((a !== it.address || zone !== (it.zone || '')) && it.geo !== 'manual') Object.assign(it, { lat: null, lng: null, geo: null });
         it.address = a; it.refs = cleanSpaces($('#e-refs').value); it.zone = zone;
+        const prevCompany = it.company || '';
         it.orderNo = cleanPackage($('#e-order').value); it.company = cleanSpaces($('#e-co').value);
         if (it.status !== 'pending') {
-          it.message = it.status === 'delivered' ? buildDeliveredMessage({ pkg: it.pkg, company: it.company, address: fullAddress(it), cedula: it.cedula })
-            : buildFailedMessage({ pkg: it.pkg, address: fullAddress(it), reasonCode: it.reasonCode, reasonText: it.reasonText });
-          if (it.sendStatus === 'sent') toast('Ojo: el mensaje ya enviado tenía la dirección anterior', 4000);
+          it.message = it.status === 'delivered' ? buildDeliveredMessage({ pkg: it.pkg, company: it.company, cedula: it.cedula })
+            : buildFailedMessage({ pkg: it.pkg, company: it.company, reasonCode: it.reasonCode, reasonText: it.reasonText });
+          if (it.sendStatus === 'sent' && it.company !== prevCompany) toast('Ojo: el mensaje ya enviado tenía la empresa anterior', 4000);
         }
         await DB.putItem(it); closeModal(); await reloadItems(); render();
       };

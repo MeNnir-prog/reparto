@@ -144,15 +144,14 @@ Reintentar usa el **mismo** registro (cuenta intentos), nunca crea un segundo re
 ```
 #1567
 Nova
-Zum Felde 2190, apto 2
 4567890-5
 ```
-(La línea de la empresa va solo si la parada tiene empresa.)
 ```
 #2001
-Camino Carrasco 7012
+Resty
 No se entregó porque el cliente no estaba en casa.
 ```
+Pedido y empresa; la dirección no va en el mensaje. La línea de la empresa va solo si la parada tiene empresa.
 La cédula se acepta con o sin puntos/guion y se envía como `1234567-8`. Se valida el dígito verificador uruguayo; si no coincide, avisa (no corrige ni inventa).
 
 ---
