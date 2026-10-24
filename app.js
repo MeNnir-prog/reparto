@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -137,7 +137,7 @@ function go(view, params = {}, replace = false) {
   render(); window.scrollTo(0, 0);
 }
 window.addEventListener('popstate', e => {
-  const st = e.state || { view: 'route', params: {} };
+  const st = e.state || { view: 'routes', params: {} };
   S.view = st.view; S.params = st.params || {}; closeModal();
   if (S.draft && !['deliver', 'fail', 'confirm'].includes(S.view)) dropDraft();
   render();
@@ -149,8 +149,9 @@ document.querySelectorAll('#tabbar .tab').forEach(b => b.addEventListener('click
 const FORM_VIEWS = ['deliver', 'fail', 'confirm', 'send', 'detail'];
 function render() {
   document.body.classList.toggle('hide-tabs', FORM_VIEWS.includes(S.view));
-  document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === S.view));
-  const views = { route: vRoute, map: vMap, detail: vDetail, deliver: vDeliver, fail: vFail, confirm: vConfirm, send: vSend, import: vImport, history: vHistory, settings: vSettings, help: vHelp };
+  const tab = ['route', 'detail'].includes(S.view) ? 'routes' : S.view;
+  document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  const views = { routes: vRoutes, route: vRoute, map: vMap, detail: vDetail, deliver: vDeliver, fail: vFail, confirm: vConfirm, send: vSend, import: vImport, history: vHistory, settings: vSettings, help: vHelp };
   if (S.view !== 'map' && MAP) closeMap();
   (views[S.view] || vRoute)();
   updateBadge();
@@ -160,21 +161,98 @@ function setTop(title, sub = '', extra = '') {
 }
 const backBtn = (label = 'Volver') => `<button class="back" data-act="back">‹ ${esc(label)}</button>`;
 
-/* ================= Vista: Reparto ================= */
-function vRoute() {
-  if (!S.day) {
-    setTop('Reparto');
-    $('#view').innerHTML = `<div class="empty"><div class="big">📦</div><h2>No hay jornada cargada</h2>
-      <p class="muted">Importá las capturas de la lista de direcciones del día.</p></div>
-      <div class="stack"><button class="btn primary big" data-act="tab" data-tab="import">📥 Importar lista del día</button>
+/* ================= Vista: Rutas (cada importación es una ruta) ================= */
+const routeTitle = d => `${fmtDate(d.date)} · ${fmtTime(d.createdAt)}`;
+
+function companiesOf(items) {
+  const count = {};
+  for (const i of items) if (i.company) count[i.company] = (count[i.company] || 0) + 1;
+  const names = Object.keys(count).sort((a, b) => count[b] - count[a]);
+  return names.length > 3 ? `${names.slice(0, 3).join(', ')} +${names.length - 3}` : names.join(', ');
+}
+
+/** Grupos de paradas importadas en momentos distintos dentro de una misma ruta (más de 20 s entre una y otra). */
+function importBatches(items) {
+  const list = items.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const groups = [];
+  for (const it of list) {
+    const g = groups[groups.length - 1];
+    if (g && (it.createdAt || 0) - g.last <= 20000) { g.items.push(it); g.last = it.createdAt || 0; }
+    else groups.push({ first: it.createdAt || 0, last: it.createdAt || 0, items: [it] });
+  }
+  return groups;
+}
+
+async function splitRoute(id) {
+  const day = await DB.getDay(id); if (!day) return;
+  const groups = importBatches(await DB.itemsOfDay(id));
+  if (groups.length < 2) return;
+  const ok = await ask('Separar ruta', `Esta ruta tiene ${groups.length} importaciones mezcladas (${groups.map(g => `${g.items.length} paradas a las ${fmtTime(g.first)}`).join(', ')}). Se separan en ${groups.length} rutas. El orden optimizado se borra: después armá la ruta de nuevo en cada una.`, { ok: 'Separar' });
+  if (!ok) return;
+  const reset = (it, i, dayId) => Object.assign(it, { dayId, order: i, routeOrder: null });
+  groups[0].items.sort((a, b) => a.order - b.order).forEach((it, i) => reset(it, i, day.id));
+  day.route = null; day.createdAt = groups[0].first || day.createdAt;
+  await DB.putDay(day); await DB.putItems(groups[0].items);
+  for (const g of groups.slice(1)) {
+    const d = new Date(g.first);
+    const nd = { id: DB.uid(), date: todayISO(d), createdAt: g.first };
+    await DB.putDay(nd);
+    g.items.sort((a, b) => a.order - b.order).forEach((it, i) => reset(it, i, nd.id));
+    await DB.putItems(g.items);
+  }
+  if (S.day?.id === id) await loadActiveDay();
+  toast(`✓ Separada en ${groups.length} rutas`);
+  render();
+}
+
+async function vRoutes() {
+  setTop('Rutas', 'Cada lista que importás es una ruta');
+  const days = await DB.listDays();
+  if (S.view !== 'routes') return;
+  if (!days.length) {
+    $('#view').innerHTML = `<div class="empty"><div class="big">📦</div><h2>Todavía no hay rutas</h2>
+      <p class="muted">Importá las capturas de la lista del día: cada importación queda como una ruta.</p></div>
+      <div class="stack"><button class="btn primary big" data-act="tab" data-tab="import">📥 Importar lista</button>
       ${!S.settings.phone ? `<button class="btn" data-act="tab" data-tab="settings">⚙️ Configurar WhatsApp de destino</button>` : ''}
       <button class="btn link" data-act="tab" data-tab="help">¿Cómo funciona?</button></div>`;
     return;
   }
+  const cards = [];
+  for (const d of days) {
+    const its = await DB.itemsOfDay(d.id);
+    const st = dayStats(its);
+    const done = st.delivered + st.failed;
+    const pct = st.total ? Math.round(done / st.total * 100) : 0;
+    const co = companiesOf(its);
+    const batches = importBatches(its).length;
+    cards.push(`<li class="card routeitem ${d.id === S.day?.id ? 'open' : ''}">
+      <button class="ri-main" data-act="day-open" data-id="${d.id}">
+        <div class="ri-top"><span class="ri-date">🗓️ ${routeTitle(d)}</span>
+          ${d.id === S.day?.id ? '<span class="pill ok">Abierta</span>' : ''}${d.demo ? '<span class="pill gray">Prueba</span>' : ''}${d.shared ? '<span class="pill gray">Recibida</span>' : ''}</div>
+        <div class="ri-stats"><b>${st.total}</b> paradas · ${st.pending} pendientes${st.delivered ? ` · ✅ ${st.delivered}` : ''}${st.failed ? ` · ❌ ${st.failed}` : ''}</div>
+        ${co ? `<div class="small muted">${esc(co)}</div>` : ''}
+        ${d.route ? `<div class="small muted">🗺️ Ruta optimizada · ${fmtKm(d.route.distance)}${d.route.duration ? ` · ${fmtMin(d.route.duration)}` : ''}</div>` : ''}
+        ${st.unsent ? `<div class="small" style="color:var(--warn);font-weight:650">${st.unsent} reportes sin enviar</div>` : ''}
+        <div class="ri-bar"><i style="width:${pct}%"></i></div>
+      </button>
+      ${batches > 1 ? `<div class="ri-actions"><button class="btn small" style="background:var(--warn-bg);color:#7a4b00" data-act="day-split" data-id="${d.id}">✂️ Tiene ${batches} importaciones mezcladas: separar en ${batches} rutas</button></div>` : ''}
+      <div class="row ri-actions">
+        <button class="btn small" data-act="day-share" data-id="${d.id}">📤 Compartir</button>
+        <button class="btn small danger-outline" data-act="day-del" data-id="${d.id}">🗑️ Eliminar</button></div>
+    </li>`);
+  }
+  $('#view').innerHTML = `<button class="btn primary" data-act="tab" data-tab="import">＋ Importar nueva ruta</button>
+    <ul class="list" style="margin-top:12px">${cards.join('')}</ul>
+    <p class="small muted center" style="margin-top:14px">Las rutas de más de ${S.settings.retentionDays} días se borran solas (cambialo en Ajustes).</p>`;
+}
+
+/* ================= Vista: Paradas de una ruta ================= */
+function vRoute() {
+  if (!S.day) return go('routes', {}, true);
   const st = dayStats(S.items);
   const done = st.delivered + st.failed;
   const pct = st.total ? Math.round(done / st.total * 100) : 0;
-  setTop(`Jornada ${fmtDate(S.day.date)}`,
+  setTop(`Ruta ${routeTitle(S.day)}`,
     `<b>${done}/${st.total}</b> reportadas${st.unsent ? ` · <span class="top-warn">${st.unsent} sin enviar</span>` : ''}`,
     `<div class="progress" aria-label="Progreso ${pct}%"><i style="width:${pct}%"></i></div>`);
   const chips = [
@@ -183,7 +261,7 @@ function vRoute() {
   ];
   const r = S.day.route;
   const next = sortedItems().find(i => i.status === 'pending');
-  $('#view').innerHTML = `
+  $('#view').innerHTML = `<button class="back" data-act="tab" data-tab="routes">‹ Todas las rutas</button>
     ${!S.settings.phone ? `<div class="alert warn" style="margin-bottom:10px">Falta configurar el número de WhatsApp de destino. <button class="btn small link" data-act="tab" data-tab="settings">Configurar</button></div>` : ''}
     <section class="card stats4">
       <div class="stat"><b>${st.total}</b><span>Paradas</span></div>
@@ -282,9 +360,11 @@ function gpsErrorText(e) {
 function showGpsHelp() {
   ask('Activar la ubicación', `En el iPhone:<ol class="steps small">
     <li><b>Ajustes → Privacidad y seguridad → Localización</b>: activada.</li>
-    <li>Ahí mismo, <b>Sitios web de Safari</b> → <b>Al usar la app</b>, con <b>Ubicación exacta</b> activada.</li>
-    <li>Si sigue sin preguntar: <b>Ajustes → Apps → Safari → Ubicación → Preguntar</b>.</li>
-    <li>Cerrá la app del todo, abrila de nuevo y tocá <b>◎</b> en el mapa.</li></ol>`, { ok: 'Entendido', cancel: 'Cerrar' });
+    <li>Ahí mismo, <b>Sitios web de Safari</b> → <b>Al usar la app</b> (si dice “Nunca”, no se puede activar en ninguna página), con <b>Ubicación exacta</b> activada.</li>
+    <li>Si esas opciones están en gris: <b>Tiempo en pantalla → Restricciones de contenido y privacidad → Localización → Permitir cambios</b>.</li>
+    <li>Si abriste el enlace desde WhatsApp, abrilo en <b>Safari</b>.</li>
+    <li>Cerrá la app del todo, abrila de nuevo y tocá <b>◎</b> en el mapa.</li></ol>
+    <div class="small muted">En Ajustes de la app, “Probar ubicación” te dice cuál de estos pasos falla.</div>`, { ok: 'Entendido', cancel: 'Cerrar' });
 }
 
 /**
@@ -354,9 +434,10 @@ function vMap() {
   if (!S.day) {
     setTop('Mapa', 'Tu ubicación');
     $('#view').innerHTML = `<div id="mapbox" class="mapbox"><div class="map-msg"><span class="spinner"></span> Cargando mapa…</div></div>
-      <div class="card" style="margin-top:12px"><b>No hay jornada cargada</b>
-      <p class="small muted" style="margin:4px 0 10px">Importá la lista del día para ver las paradas y armar la ruta.</p>
-      <button class="btn primary" data-act="tab" data-tab="import">📥 Importar lista del día</button></div>`;
+      <div class="card" style="margin-top:12px"><b>No hay ninguna ruta abierta</b>
+      <p class="small muted" style="margin:4px 0 10px">Abrí una ruta para ver sus paradas en el mapa, o importá una nueva.</p>
+      <div class="row"><button class="btn primary" data-act="tab" data-tab="routes">📦 Rutas</button>
+      <button class="btn" data-act="tab" data-tab="import">📥 Importar</button></div></div>`;
     drawMap();
     return;
   }
@@ -935,8 +1016,8 @@ async function apiSend(it) {
 
 /* ================= Importación ================= */
 function newImp() {
-  const sameDay = S.day && S.day.date === todayISO();
-  return { target: sameDay ? 'append' : 'new', deletePrev: false, images: [], manual: [], busy: null, pasteOpen: false };
+  // Cada importación es una ruta nueva; agregar a la ruta abierta es una opción explícita.
+  return { target: 'new', images: [], manual: [], busy: null, pasteOpen: false };
 }
 
 function impRows() {
@@ -949,7 +1030,7 @@ function impRows() {
 function vImport() {
   if (!S.imp) S.imp = newImp();
   const imp = S.imp;
-  setTop('Importar lista del día', S.day ? `Jornada actual: ${fmtDate(S.day.date)} · ${S.items.length} direcciones` : 'No hay jornada cargada');
+  setTop('Importar lista', imp.target === 'append' && S.day ? `Se agrega a la ruta ${routeTitle(S.day)}` : 'Se crea una ruta nueva');
   const rows = impRows();
   const active = rows.filter(x => x.r.include);
   const existing = imp.target === 'append' ? S.items.map(i => ({ text: fullAddress(i) })) : [];
@@ -957,14 +1038,11 @@ function vImport() {
   rows.filter(x => !x.r.include).forEach(x => { x.r.dupRows = []; x.r.similarRows = []; x.r.dupExisting = 0; x.r.similarExisting = 0; });
   const lowN = active.filter(x => x.r.lowConf).length;
   const dupN = active.filter(x => x.r.dupRows?.length || x.r.dupExisting).length;
-  const st = S.day ? dayStats(S.items) : null;
   $('#view').innerHTML = `
-    ${S.day ? `<div class="card"><div style="font-weight:700">¿Dónde se cargan?</div>
-      <label class="reason ${imp.target === 'new' ? 'sel' : ''}" style="margin-top:8px"><input type="radio" name="tgt" value="new" ${imp.target === 'new' ? 'checked' : ''}>Nueva jornada (${fmtDate(todayISO())})</label>
-      <label class="reason ${imp.target === 'append' ? 'sel' : ''}" style="margin-top:8px"><input type="radio" name="tgt" value="append" ${imp.target === 'append' ? 'checked' : ''}>Agregar a la jornada del ${fmtDate(S.day.date)}</label>
-      ${imp.target === 'new' ? `<label class="reason" style="margin-top:8px"><input type="checkbox" id="delPrev" ${imp.deletePrev ? 'checked' : ''}>Borrar la jornada anterior (${S.items.length} direcciones${st.unsent ? `, <b style="color:var(--bad)">&nbsp;${st.unsent} reportes sin enviar</b>` : ''})</label>
-        <div class="small muted" style="margin-top:6px">Si no la borrás, queda en Historial y no se mezcla con la nueva.</div>` : ''}
-    </div>` : ''}
+    <div class="card"><div style="font-weight:700">${imp.target === 'append' && S.day ? `Se agregan a la ruta del ${routeTitle(S.day)}` : '📦 Se crea una ruta nueva'}</div>
+      <div class="small muted" style="margin-top:4px">Podés elegir varias capturas de la misma lista: quedan todas en esta ruta.</div>
+      ${S.day ? `<label class="reason" style="margin-top:8px"><input type="checkbox" id="tgtAppend" ${imp.target === 'append' ? 'checked' : ''}>En vez de eso, agregar a la ruta abierta (${routeTitle(S.day)})</label>` : ''}
+    </div>
     <h2>1. Agregar capturas</h2>
     <div class="stack">
       <label class="btn primary big" for="imp-gal">🖼️ Elegir capturas</label>
@@ -972,6 +1050,8 @@ function vImport() {
       <input type="file" id="imp-gal" class="hidden-input" accept="image/*" multiple>
       <input type="file" id="imp-cam" class="hidden-input" accept="image/*" capture="environment">
       <div class="small muted">El reconocimiento se hace en este teléfono: las capturas no se suben a ningún servidor. La primera vez descarga el motor de lectura (~15&nbsp;MB).</div>
+      <label class="btn" for="imp-shared">📂 Abrir ruta compartida (archivo .json)</label>
+      <input type="file" id="imp-shared" class="hidden-input" accept=".json,application/json">
     </div>
     ${imp.pasteOpen ? `<div class="card" style="margin-top:12px"><div style="font-weight:700">Pegar o escribir direcciones</div>
       <div class="small muted">Una por línea. Truco: en Fotos abrí la captura, mantené apretado el texto (Texto en vivo) → Seleccionar todo → Copiar, y pegalo acá.</div>
@@ -994,8 +1074,8 @@ function vImport() {
         <button class="btn ok big" data-act="imp-commit" ${active.length ? '' : 'disabled'}>Importar ${active.length} direcciones</button></div>
       <button class="btn link danger-outline" data-act="imp-reset">Descartar todo</button>` :
       `<button class="btn link" data-act="imp-add-row">＋ Agregar dirección a mano</button>`}`;
-  document.querySelectorAll('input[name=tgt]').forEach(r => r.addEventListener('change', () => { imp.target = r.value; vImport(); }));
-  $('#delPrev')?.addEventListener('change', e => { imp.deletePrev = e.target.checked; });
+  $('#tgtAppend')?.addEventListener('change', e => { imp.target = e.target.checked ? 'append' : 'new'; vImportKeepScroll(); });
+  $('#imp-shared').addEventListener('change', e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importSharedFile(f); });
   for (const id of ['imp-gal', 'imp-cam']) $('#' + id).addEventListener('change', e => { const fs = [...(e.target.files || [])]; e.target.value = ''; processImages(fs); });
   document.querySelectorAll('[data-rowtext]').forEach(inp => inp.addEventListener('change', e => {
     const r = refRow(JSON.parse(e.target.dataset.rowtext)); r.text = cleanSpaces(e.target.value); r.edited = true;
@@ -1076,17 +1156,13 @@ async function importCommit() {
   const imp = S.imp;
   const rows = impRows().map(x => x.r).filter(r => r.include && cleanSpaces(r.text));
   if (!rows.length) return;
-  if (imp.target === 'new' && imp.deletePrev && S.day) {
-    const st = dayStats(S.items);
-    if (st.unsent && !(await ask('Hay reportes sin enviar', `La jornada anterior tiene ${st.unsent} reportes sin enviar. Si la borrás, se pierden.`, { ok: 'Borrar igual', cancel: 'Cancelar', danger: true }))) return;
-  }
+  const appending = imp.target === 'append' && S.day;
   let day = S.day;
-  if (imp.target === 'new' || !day) {
-    if (imp.deletePrev && S.day) await DB.deleteDay(S.day.id);
+  if (!appending) {
     day = { id: DB.uid(), date: todayISO(), createdAt: Date.now() };
     await DB.putDay(day); await DB.setMeta('activeDayId', day.id);
   }
-  const start = imp.target === 'append' && S.day ? S.items.length : 0;
+  const start = appending ? S.items.length : 0;
   const items = rows.map((r, i) => {
     const sp = splitAddress(r.text);
     return {
@@ -1101,7 +1177,87 @@ async function importCommit() {
   await DB.putItems(items);
   S.day = day; S.imp = null; await reloadItems();
   try { navigator.storage?.persist?.(); } catch {}
-  toast(`✓ ${items.length} direcciones importadas`);
+  toast(appending ? `✓ ${items.length} paradas agregadas a la ruta` : `✓ Ruta nueva con ${items.length} paradas`);
+  S.filter = 'pending'; S.query = '';
+  go('route', {}, true);
+}
+
+/* ================= Compartir rutas ================= */
+// Lo que se comparte son las paradas (pedido, empresa, dirección, barrio y ubicación).
+// Nunca cédulas, fotos, motivos ni el estado de los reportes.
+const SHARE_FIELDS = ['order', 'orderNo', 'company', 'zone', 'address', 'refs', 'original', 'lat', 'lng', 'geo', 'routeOrder'];
+
+function routeText(day, items) {
+  const list = items.slice().sort((a, b) => (a.routeOrder ?? 1e6) - (b.routeOrder ?? 1e6) || a.order - b.order);
+  const lines = list.map((it, i) => {
+    const head = [it.orderNo ? `#${it.orderNo}` : '', it.company].filter(Boolean).join(' · ');
+    return `${i + 1}. ${head ? head + ' — ' : ''}${fullAddress(it)}${it.zone ? ` (${it.zone})` : ''}`;
+  });
+  return `🗓️ Ruta ${routeTitle(day)} — ${items.length} paradas\n\n${lines.join('\n')}`;
+}
+
+function routeFile(day, items) {
+  const data = {
+    app: 'reparto', type: 'ruta', v: 1, createdAt: day.createdAt, date: day.date,
+    route: day.route ? { distance: day.route.distance, duration: day.route.duration, via: day.route.via, count: day.route.count, at: day.route.at } : null,
+    items: items.map(it => Object.fromEntries(SHARE_FIELDS.map(k => [k, it[k] ?? null])))
+  };
+  const d = new Date(day.createdAt), z = n => String(n).padStart(2, '0');
+  const name = `ruta-${day.date}-${z(d.getHours())}${z(d.getMinutes())}.json`;
+  return new File([JSON.stringify(data)], name, { type: 'application/json' });
+}
+
+function downloadFile(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+async function shareRoute(id) {
+  const day = await DB.getDay(id); if (!day) return;
+  const items = await DB.itemsOfDay(id);
+  // Se arma todo antes de mostrar las opciones: iOS solo deja compartir justo después de un toque.
+  const text = routeText(day, items);
+  const file = routeFile(day, items);
+  const canFile = canShareFiles(file);
+  openModal(`<h2>Compartir ruta</h2><div class="small muted">🗓️ ${routeTitle(day)} · ${items.length} paradas</div>
+    <div class="stack" style="margin-top:14px">
+      <button class="btn primary" id="sh-text">📝 Como texto (WhatsApp, mensajes…)</button>
+      <div class="small muted">La lista de paradas en orden: pedido, empresa, dirección y barrio.</div>
+      <button class="btn" id="sh-file">📲 A otro teléfono con la app</button>
+      <div class="small muted">Manda un archivo; en el otro teléfono: Importar → “Abrir ruta compartida”. No incluye cédulas, fotos ni reportes.</div>
+      <button class="btn link" id="sh-no">Cancelar</button></div>`);
+  $('#sh-no').onclick = closeModal;
+  $('#sh-text').onclick = () => {
+    if (navigator.share) {
+      navigator.share({ title: `Ruta ${routeTitle(day)}`, text }).then(closeModal, err => { if (err.name !== 'AbortError') copyText(text).then(() => toast('📋 Lista copiada')); });
+    } else copyText(text).then(ok => { closeModal(); toast(ok === false ? 'No se pudo copiar' : '📋 Lista copiada: pegala donde quieras'); });
+  };
+  $('#sh-file').onclick = () => {
+    if (canFile) navigator.share({ files: [file], title: `Ruta ${routeTitle(day)}` }).then(closeModal, err => { if (err.name !== 'AbortError') { downloadFile(file); closeModal(); } });
+    else { downloadFile(file); closeModal(); toast('Archivo de la ruta descargado'); }
+  };
+}
+
+async function importSharedFile(f) {
+  let data;
+  try { data = JSON.parse(await f.text()); } catch { return toast('Ese archivo no es una ruta de la app', 4000); }
+  if (data?.app !== 'reparto' || data.type !== 'ruta' || !Array.isArray(data.items)) return toast('Ese archivo no es una ruta de la app', 4000);
+  const day = { id: DB.uid(), date: todayISO(), createdAt: Date.now(), shared: true, sharedFrom: data.createdAt || null };
+  const items = data.items.filter(x => x && cleanSpaces(x.address)).map((x, i) => ({
+    id: DB.uid(), dayId: day.id, order: Number.isFinite(x.order) ? x.order : i,
+    original: cleanSpaces(x.original || x.address), address: cleanSpaces(x.address), refs: cleanSpaces(x.refs || ''), crop: '',
+    orderNo: cleanPackage(x.orderNo || ''), company: cleanSpaces(x.company || ''), zone: cleanSpaces(x.zone || ''),
+    lat: Number.isFinite(x.lat) ? x.lat : null, lng: Number.isFinite(x.lng) ? x.lng : null,
+    geo: Number.isFinite(x.lat) ? (x.geo || 'exact') : null, routeOrder: Number.isFinite(x.routeOrder) ? x.routeOrder : null,
+    ocrConf: null, status: 'pending', pkg: '', cedula: '', reasonCode: '', reasonText: '',
+    photoId: null, reportedAt: null, sendStatus: 'none', sendAttempts: 0, message: '', createdAt: Date.now()
+  }));
+  if (!items.length) return toast('La ruta compartida no tiene paradas', 4000);
+  await DB.putDay(day); await DB.putItems(items); await DB.setMeta('activeDayId', day.id);
+  S.day = day; S.imp = null; await reloadItems();
+  toast(`✓ Ruta recibida: ${items.length} paradas`);
   S.filter = 'pending'; S.query = '';
   go('route', {}, true);
 }
@@ -1111,8 +1267,7 @@ async function vHistory() {
   const st = dayStats(S.items);
   const reports = S.items.filter(i => i.status !== 'pending').sort((a, b) => (b.reportedAt || 0) - (a.reportedAt || 0));
   const unsent = reports.filter(i => i.sendStatus !== 'sent');
-  const days = await DB.listDays();
-  setTop('Historial', S.day ? `Jornada ${fmtDate(S.day.date)}` : '');
+  setTop('Historial', S.day ? `Reportes de la ruta ${routeTitle(S.day)}` : '');
   const repLi = it => `<li><button class="addr ${it.status}" data-act="open" data-id="${it.id}"><span class="dot ${it.status}"></span>
     <span class="main"><div class="street"><span class="mono">#${esc(it.pkg)}</span> · ${esc(it.address)}</div>
     <div class="meta">${it.refs ? `<span class="ref">${esc(it.refs)}</span>` : ''}${statusPill(it)} ${sendPill(it)} <span>${fmtTime(it.reportedAt)}</span>
@@ -1129,14 +1284,10 @@ async function vHistory() {
     ${unsent.length ? `<h2>⚠️ Sin enviar o sin confirmar</h2><ul class="list">${unsent.map(repLi).join('')}</ul>` : ''}
     <h2>Reportes (${reports.length})</h2>
     ${reports.length ? `<ul class="list">${reports.map(repLi).join('')}</ul>` : '<p class="muted">Todavía no hay reportes.</p>'}
-  ` : '<p class="muted">No hay jornada activa.</p>';
+  ` : '<p class="muted">No hay ninguna ruta abierta. Elegí una en Rutas.</p>';
   $('#view').insertAdjacentHTML('beforeend', `
-    <h2>Jornadas guardadas</h2>
-    <ul class="list">${days.map(d => `<li class="card row" style="align-items:center">
-      <div><b>${fmtDate(d.date)}</b> ${d.id === S.day?.id ? '<span class="pill">Activa</span>' : ''}<div class="small muted">Creada ${fmtDateTime(d.createdAt)}</div></div>
-      <div style="flex:none;display:flex;gap:6px">${d.id !== S.day?.id ? `<button class="btn small" data-act="day-open" data-id="${d.id}">Abrir</button>` : ''}
-      <button class="btn small danger-outline" data-act="day-del" data-id="${d.id}">Borrar</button></div></li>`).join('') || '<li class="muted">No hay jornadas.</li>'}</ul>
-    <p class="small muted">Los datos (direcciones, cédulas y fotos) se guardan solo en este iPhone, dentro de la app. Se borran automáticamente las jornadas de más de ${S.settings.retentionDays} días (cambialo en Ajustes).</p>`);
+    <button class="btn" data-act="tab" data-tab="routes" style="margin-top:16px">📦 Ver todas las rutas</button>
+    <p class="small muted">Los datos (direcciones, cédulas y fotos) se guardan solo en este iPhone, dentro de la app. Las rutas de más de ${S.settings.retentionDays} días se borran solas (cambialo en Ajustes).</p>`);
 }
 
 /* ================= Ajustes ================= */
@@ -1167,6 +1318,8 @@ async function vSettings() {
       <label class="field"><span>Dirección de partida${s.startMode === 'gps' ? ' (se usa si no hay ubicación)' : ''}</span><input id="s-start" value="${esc(s.startAddress)}" placeholder="Ej: Av. Italia 4100" autocomplete="off"></label>
       <p class="small muted">Al tocar “Armar ruta” se envían calle, número y barrio a OpenStreetMap para ubicarlas y calcular el recorrido. ${s.mapConsent ? 'Ya lo aceptaste.' : ''}</p>
       <button class="btn primary" data-act="s-save" style="margin-top:6px">Guardar</button>
+      <button class="btn" data-act="gps-test" style="margin-top:10px">📍 Probar ubicación</button>
+      <div id="gps-diag"></div>
     </div>
     <h2>Privacidad y datos</h2>
     <div class="card stack">
@@ -1185,13 +1338,55 @@ async function vSettings() {
     </details>
     <div class="stack" style="margin-top:16px">
       <button class="btn" data-act="tab" data-tab="help">❓ Ayuda e instalación</button>
-      <button class="btn" data-act="demo">🧪 Crear jornada de prueba (datos ficticios)</button>
+      <button class="btn" data-act="demo">🧪 Crear ruta de prueba (datos ficticios)</button>
     </div>
     <p class="small muted center">Versión ${APP_VERSION}</p>`;
   $('#s-phone').addEventListener('input', e => {
     const n = normalizePhone(e.target.value);
     $('#s-phone-hint').textContent = e.target.value ? (isValidPhone(n) ? 'Se usará +' + n : 'Número incompleto') : '';
   });
+}
+
+/**
+ * Diagnóstico de ubicación: revisa cada cosa que puede impedirla y dice cuál falla.
+ * Se llama desde un toque (en iOS, pedir la ubicación desde un toque es lo más confiable).
+ */
+async function gpsDiagnose() {
+  const box = $('#gps-diag'); if (!box) return;
+  const ua = navigator.userAgent;
+  const inApp = /FBAN|FBAV|Instagram|WhatsApp|Line\/|GSA\//i.test(ua);
+  const iosChrome = /CriOS|FxiOS|EdgiOS/i.test(ua);
+  const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  let perm = 'desconocido';
+  try { perm = (await navigator.permissions?.query({ name: 'geolocation' }))?.state || perm; } catch {}
+  const rows = [
+    ['Página segura (https)', window.isSecureContext, 'Abrí la app desde https://mennir-prog.github.io/reparto/'],
+    ['Abierta en Safari o desde el ícono', !inApp, 'Está abierta dentro de otra app (WhatsApp, Instagram…). Tocá ••• → Abrir en Safari.'],
+    ['El navegador da ubicación', !!navigator.geolocation, 'Este navegador no da ubicación.']
+  ];
+  const line = ([t, ok, fix]) => `<li>${ok ? '✅' : '❌'} ${esc(t)}${ok ? '' : `<div class="small" style="color:var(--bad)">${esc(fix)}</div>`}</li>`;
+  const render = (last) => {
+    box.innerHTML = `<div class="card" style="margin-top:10px;box-shadow:none;background:var(--soft2)">
+      <ul class="diag">${rows.map(line).join('')}${last || ''}</ul>
+      <div class="small muted" style="margin-top:6px">Modo: ${standalone ? 'ícono de inicio' : iosChrome ? 'Chrome/Firefox en iPhone' : 'navegador'} · permiso: ${esc(perm)}</div></div>`;
+  };
+  render('<li><span class="spinner"></span> Pidiendo tu ubicación… si aparece un cartel, tocá <b>Permitir</b>.</li>');
+  if (!window.isSecureContext || !navigator.geolocation) return render();
+  try {
+    const M = await import('./map.js');
+    const p = await M.currentPosition();
+    S.myPos = p;
+    render(`<li>✅ Ubicación obtenida (precisión ±${Math.round(p.acc || 0)} m). <b>Funciona.</b></li>`);
+  } catch (e) {
+    const steps = e.denied ? `<ol class="steps small">
+      <li>Abrí <b>Ajustes → Privacidad y seguridad → Localización</b> y verificá que esté <b>activada</b>.</li>
+      <li>Bajá hasta <b>Sitios web de Safari</b>: tiene que decir <b>“Al usar la app”</b> (si dice “Nunca”, iOS no deja activarla para ninguna página). Activá <b>Ubicación exacta</b>.</li>
+      <li>Si esas opciones aparecen en gris: <b>Ajustes → Tiempo en pantalla → Restricciones de contenido y privacidad → Localización</b> → <b>Permitir cambios</b>.</li>
+      <li>En Safari, con la app abierta: botón <b>aA</b> (o ⋯) → <b>Configuración del sitio web</b> → <b>Ubicación → Preguntar</b>.</li>
+      <li>Cerrá la app del todo, abrila y volvé a tocar <b>Probar ubicación</b>.</li></ol>`
+      : '<div class="small">Probá al aire libre o con el GPS activado, y volvé a tocar Probar ubicación.</div>';
+    render(`<li>❌ ${esc(e.message)}${steps}</li>`);
+  }
 }
 
 async function saveSettingsFromForm() {
@@ -1329,14 +1524,18 @@ document.addEventListener('click', async e => {
     case 'imp-commit': importCommit(); break;
     case 'imp-reset': if (await ask('Descartar', '¿Descartar las capturas y direcciones sin importar?', { ok: 'Descartar', danger: true })) { S.imp = newImp(); vImport(); } break;
     // Historial / ajustes
-    case 'day-open': await DB.setMeta('activeDayId', id); await loadActiveDay(); toast('Jornada abierta'); go('route', {}, true); break;
+    case 'day-open':
+      if (S.day?.id !== id) { await DB.setMeta('activeDayId', id); await loadActiveDay(); S.filter = 'pending'; S.query = ''; S.mapSel = null; S.pick = null; }
+      go('route'); break;
+    case 'day-share': shareRoute(id); break;
+    case 'day-split': splitRoute(id); break;
     case 'day-del': {
       const d = await DB.getDay(id); if (!d) break;
       const its = await DB.itemsOfDay(id); const un = dayStats(its).unsent;
-      if (await ask('Borrar jornada', `Jornada del ${fmtDate(d.date)}: ${its.length} direcciones, reportes y fotos.${un ? ` <b>${un} reportes sin enviar.</b>` : ''} No se puede deshacer.`, { ok: 'Borrar', danger: true })) {
+      if (await ask('Eliminar ruta', `Ruta del ${routeTitle(d)}: ${its.length} paradas, con sus reportes y fotos.${un ? ` <b>Tiene ${un} reportes sin enviar.</b>` : ''} No se puede deshacer.`, { ok: 'Eliminar', danger: true })) {
         await DB.deleteDay(id);
         if (S.day?.id === id) { await DB.setMeta('activeDayId', null); S.day = null; S.items = []; }
-        toast('Jornada borrada'); vHistory();
+        toast('Ruta eliminada'); render();
       }
     } break;
     case 'wipe': if (await ask('Borrar todo', 'Se borran todas las jornadas, reportes y fotos de este teléfono. Los ajustes se mantienen.', { ok: 'Borrar todo', danger: true })) {
@@ -1345,11 +1544,12 @@ document.addEventListener('click', async e => {
     } break;
     case 's-save': saveSettingsFromForm(); break;
     case 'demo': await createDemo(); break;
+    case 'gps-test': gpsDiagnose(); break;
   }
 });
 
 async function createDemo() {
-  if (S.day && !(await ask('Jornada de prueba', 'Se crea una jornada nueva con direcciones ficticias. La actual queda en Historial.', { ok: 'Crear' }))) return;
+  if (!(await ask('Ruta de prueba', 'Se crea una ruta nueva con direcciones ficticias. Tus otras rutas no se tocan.', { ok: 'Crear' }))) return;
   // Calles reales de Montevideo con números de ejemplo (para probar el mapa); pedidos y empresas inventados.
   const demo = [
     ['9001', 'Nova', 'Malvín', 'Zum Felde 2190, casa'], ['9002', 'Nova', 'Malvín', 'Zum Felde 2190, apto 2'],
@@ -1361,7 +1561,7 @@ async function createDemo() {
   const day = { id: DB.uid(), date: todayISO(), createdAt: Date.now(), demo: true };
   await DB.putDay(day); await DB.setMeta('activeDayId', day.id);
   await DB.putItems(demo.map(([orderNo, company, zone, t], i) => { const sp = splitAddress(t); return { id: DB.uid(), dayId: day.id, order: i, original: t, address: sp.address, refs: sp.refs, crop: '', orderNo, company, zone, lat: null, lng: null, geo: null, routeOrder: null, status: 'pending', pkg: '', cedula: '', reasonCode: '', reasonText: '', photoId: null, reportedAt: null, sendStatus: 'none', sendAttempts: 0, message: '', createdAt: Date.now() }; }));
-  S.day = day; await reloadItems(); toast('Jornada de prueba creada'); go('route', {}, true);
+  S.day = day; await reloadItems(); toast('Ruta de prueba creada'); go('route', {}, true);
 }
 
 /* ================= Al volver de WhatsApp ================= */
@@ -1381,11 +1581,12 @@ async function init() {
     await loadSettings();
     await loadActiveDay();
     const purged = await purgeOld();
-    if (purged) toast(`Se borraron ${purged} jornadas antiguas`);
+    if (purged) toast(`Se borraron ${purged} rutas antiguas`);
     S.draft = await DB.getMeta('draft');
     if (S.draft && !itemById(S.draft.itemId)) { S.draft = null; await saveDraft(); }
-    history.replaceState({ view: 'route', params: {} }, '');
-    S.view = 'route';
+    // Se arranca en la lista de rutas; las paradas aparecen al entrar a una.
+    history.replaceState({ view: 'routes', params: {} }, '');
+    S.view = 'routes';
     // Si iOS recargó la app mientras se sacaba la foto, retomamos el formulario.
     if (S.draft) {
       history.pushState({ view: S.draft.type === 'delivered' ? 'deliver' : 'fail', params: { id: S.draft.itemId } }, '');
@@ -1405,4 +1606,4 @@ async function init() {
 init();
 
 // Exponer para pruebas automáticas
-window.__app = { S, DB, render, go };
+window.__app = { S, DB, render, go, routeText, routeFile, importSharedFile };
