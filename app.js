@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.5.0';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -32,7 +32,30 @@ const S = {
 /* ================= Utilidades UI ================= */
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('es-UY', { hour: '2-digit', minute: '2-digit' }) : '';
+const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('es-UY', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : '';
+/** "jue 23 oct" */
+const fmtDay = ts => ts ? new Date(ts).toLocaleDateString('es-UY', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '').replace(',', '') : '';
+
+// Íconos de línea (heredan el color del texto)
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  share: '<path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 12v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  nav: '<path d="M3 11 21 3l-8 18-2-8z"/>',
+  map: '<path d="M9 4 3 6.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/>',
+  route: '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H16"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  back: '<path d="m15 6-6 6 6 6"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  split: '<path d="M6 3v6a6 6 0 0 0 6 6h0a6 6 0 0 1 6 6M18 3v6a6 6 0 0 1-6 6"/>',
+  doc: '<path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  car: '<path d="M5 17h14M6 17v2M18 17v2M4 13l2-6h12l2 6v4H4z"/><circle cx="8" cy="14" r="1"/><circle cx="16" cy="14" r="1"/>'
+};
+const ic = (name, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 const fmtDate = iso => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
 const fmtDateTime = ts => ts ? new Date(ts).toLocaleString('es-UY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -149,7 +172,7 @@ document.querySelectorAll('#tabbar .tab').forEach(b => b.addEventListener('click
 const FORM_VIEWS = ['deliver', 'fail', 'confirm', 'send', 'detail'];
 function render() {
   document.body.classList.toggle('hide-tabs', FORM_VIEWS.includes(S.view));
-  const tab = ['route', 'detail'].includes(S.view) ? 'routes' : S.view;
+  const tab = ['route', 'detail', 'history'].includes(S.view) ? 'routes' : S.view;
   document.querySelectorAll('#tabbar .tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   const views = { routes: vRoutes, route: vRoute, map: vMap, detail: vDetail, deliver: vDeliver, fail: vFail, confirm: vConfirm, send: vSend, import: vImport, history: vHistory, settings: vSettings, help: vHelp };
   if (S.view !== 'map' && MAP) closeMap();
@@ -159,10 +182,10 @@ function render() {
 function setTop(title, sub = '', extra = '') {
   $('#topbar').innerHTML = `<h1>${title}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}${extra}`;
 }
-const backBtn = (label = 'Volver') => `<button class="back" data-act="back">‹ ${esc(label)}</button>`;
+const backBtn = (label = 'Volver') => `<button class="back" data-act="back">${ic('back')}${esc(label)}</button>`;
 
 /* ================= Vista: Rutas (cada importación es una ruta) ================= */
-const routeTitle = d => `${fmtDate(d.date)} · ${fmtTime(d.createdAt)}`;
+const routeTitle = d => `${fmtDay(d.createdAt)} · ${fmtTime(d.createdAt)}`;
 
 function companiesOf(items) {
   const count = {};
@@ -206,14 +229,15 @@ async function splitRoute(id) {
 }
 
 async function vRoutes() {
-  setTop('Rutas', 'Cada lista que importás es una ruta');
+  setTop('Rutas');
   const days = await DB.listDays();
   if (S.view !== 'routes') return;
   if (!days.length) {
-    $('#view').innerHTML = `<div class="empty"><div class="big">📦</div><h2>Todavía no hay rutas</h2>
-      <p class="muted">Importá las capturas de la lista del día: cada importación queda como una ruta.</p></div>
-      <div class="stack"><button class="btn primary big" data-act="tab" data-tab="import">📥 Importar lista</button>
-      ${!S.settings.phone ? `<button class="btn" data-act="tab" data-tab="settings">⚙️ Configurar WhatsApp de destino</button>` : ''}
+    $('#view').innerHTML = `<div class="empty">
+      <div class="empty-ic">${ic('route')}</div>
+      <h2>Todavía no hay rutas</h2>
+      <p class="muted">Importá las capturas de la lista del día. Cada importación queda como una ruta.</p>
+      <button class="btn primary" data-act="tab" data-tab="import">${ic('plus')}Importar lista</button>
       <button class="btn link" data-act="tab" data-tab="help">¿Cómo funciona?</button></div>`;
     return;
   }
@@ -225,25 +249,23 @@ async function vRoutes() {
     const pct = st.total ? Math.round(done / st.total * 100) : 0;
     const co = companiesOf(its);
     const batches = importBatches(its).length;
-    cards.push(`<li class="card routeitem ${d.id === S.day?.id ? 'open' : ''}">
-      <button class="ri-main" data-act="day-open" data-id="${d.id}">
-        <div class="ri-top"><span class="ri-date">🗓️ ${routeTitle(d)}</span>
-          ${d.id === S.day?.id ? '<span class="pill ok">Abierta</span>' : ''}${d.demo ? '<span class="pill gray">Prueba</span>' : ''}${d.shared ? '<span class="pill gray">Recibida</span>' : ''}</div>
-        <div class="ri-stats"><b>${st.total}</b> paradas · ${st.pending} pendientes${st.delivered ? ` · ✅ ${st.delivered}` : ''}${st.failed ? ` · ❌ ${st.failed}` : ''}</div>
-        ${co ? `<div class="small muted">${esc(co)}</div>` : ''}
-        ${d.route ? `<div class="small muted">🗺️ Ruta optimizada · ${fmtKm(d.route.distance)}${d.route.duration ? ` · ${fmtMin(d.route.duration)}` : ''}</div>` : ''}
-        ${st.unsent ? `<div class="small" style="color:var(--warn);font-weight:650">${st.unsent} reportes sin enviar</div>` : ''}
-        <div class="ri-bar"><i style="width:${pct}%"></i></div>
+    const tags = [d.id === S.day?.id ? '<span class="tag accent">Abierta</span>' : '', d.demo ? '<span class="tag">Prueba</span>' : '', d.shared ? '<span class="tag">Recibida</span>' : ''].join('');
+    cards.push(`<li class="rcard ${d.id === S.day?.id ? 'open' : ''}">
+      <button class="rcard-main" data-act="day-open" data-id="${d.id}">
+        <div class="rcard-head"><span class="rcard-title">${esc(fmtDay(d.createdAt))}</span><span class="rcard-time">${fmtTime(d.createdAt)}</span>${tags}</div>
+        <div class="rcard-sub">${st.total} paradas · ${done ? `${done} hechas` : 'sin empezar'}${st.unsent ? ` · <span class="c-warn">${st.unsent} sin enviar</span>` : ''}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        ${co || d.route ? `<div class="rcard-meta">${esc(co)}${co && d.route ? ' · ' : ''}${d.route ? `${fmtKm(d.route.distance)}${d.route.duration ? ` · ${fmtMin(d.route.duration)}` : ''}` : ''}</div>` : ''}
       </button>
-      ${batches > 1 ? `<div class="ri-actions"><button class="btn small" style="background:var(--warn-bg);color:#7a4b00" data-act="day-split" data-id="${d.id}">✂️ Tiene ${batches} importaciones mezcladas: separar en ${batches} rutas</button></div>` : ''}
-      <div class="row ri-actions">
-        <button class="btn small" data-act="day-share" data-id="${d.id}">📤 Compartir</button>
-        <button class="btn small danger-outline" data-act="day-del" data-id="${d.id}">🗑️ Eliminar</button></div>
+      <div class="rcard-tools">
+        <button class="iconbtn" data-act="day-share" data-id="${d.id}" aria-label="Compartir ruta" title="Compartir">${ic('share')}</button>
+        <button class="iconbtn danger" data-act="day-del" data-id="${d.id}" aria-label="Eliminar ruta" title="Eliminar">${ic('trash')}</button></div>
+      ${batches > 1 ? `<button class="rcard-note" data-act="day-split" data-id="${d.id}">${ic('split')}<span>Tiene ${batches} importaciones mezcladas. <b>Separar en ${batches} rutas</b></span></button>` : ''}
     </li>`);
   }
-  $('#view').innerHTML = `<button class="btn primary" data-act="tab" data-tab="import">＋ Importar nueva ruta</button>
-    <ul class="list" style="margin-top:12px">${cards.join('')}</ul>
-    <p class="small muted center" style="margin-top:14px">Las rutas de más de ${S.settings.retentionDays} días se borran solas (cambialo en Ajustes).</p>`;
+  $('#view').innerHTML = `<button class="btn primary" data-act="tab" data-tab="import">${ic('plus')}Nueva ruta</button>
+    <ul class="rlist">${cards.join('')}</ul>
+    <p class="foot">Las rutas de más de ${S.settings.retentionDays === 1 ? 'un día' : `${S.settings.retentionDays} días`} se borran solas.</p>`;
 }
 
 /* ================= Vista: Paradas de una ruta ================= */
@@ -252,37 +274,39 @@ function vRoute() {
   const st = dayStats(S.items);
   const done = st.delivered + st.failed;
   const pct = st.total ? Math.round(done / st.total * 100) : 0;
-  setTop(`Ruta ${routeTitle(S.day)}`,
-    `<b>${done}/${st.total}</b> reportadas${st.unsent ? ` · <span class="top-warn">${st.unsent} sin enviar</span>` : ''}`,
-    `<div class="progress" aria-label="Progreso ${pct}%"><i style="width:${pct}%"></i></div>`);
+  setTop(`Ruta del ${esc(fmtDay(S.day.createdAt))}`, `Creada a las ${fmtTime(S.day.createdAt)} · ${st.total} paradas`);
   const chips = [
-    ['pending', `Pendientes ${st.pending}`], ['unsent', `Sin enviar ${st.unsent}`], ['delivered', `Entregados ${st.delivered}`],
-    ['failed', `No entregados ${st.failed}`], ['all', `Todas ${st.total}`]
+    ['pending', 'Pendientes', st.pending], ['unsent', 'Sin enviar', st.unsent], ['delivered', 'Entregadas', st.delivered],
+    ['failed', 'No entregadas', st.failed], ['all', 'Todas', st.total]
   ];
   const r = S.day.route;
-  const next = sortedItems().find(i => i.status === 'pending');
-  $('#view').innerHTML = `<button class="back" data-act="tab" data-tab="routes">‹ Todas las rutas</button>
-    ${!S.settings.phone ? `<div class="alert warn" style="margin-bottom:10px">Falta configurar el número de WhatsApp de destino. <button class="btn small link" data-act="tab" data-tab="settings">Configurar</button></div>` : ''}
-    <section class="card stats4">
-      <div class="stat"><b>${st.total}</b><span>Paradas</span></div>
-      <div class="stat"><b>${st.pending}</b><span>Pendientes</span></div>
-      <div class="stat"><b class="c-ok">${st.delivered}</b><span>Entregadas</span></div>
-      <div class="stat"><b class="c-bad">${st.failed}</b><span>No entregadas</span></div>
+  const next = r ? sortedItems().find(i => i.status === 'pending') : null;
+  const nextMeta = next ? [next.orderNo ? `#${esc(next.orderNo)}` : '', esc(next.company || ''), esc(next.zone || '')].filter(Boolean).join(' · ') : '';
+  $('#view').innerHTML = `<button class="back" data-act="tab" data-tab="routes">${ic('back')}Rutas</button>
+    ${!S.settings.phone ? `<button class="notice" data-act="tab" data-tab="settings"><span>Configurá el WhatsApp de destino para poder enviar los reportes.</span>${ic('chev')}</button>` : ''}
+    <section class="card prog">
+      <div class="prog-top"><span><b>${done}</b> de ${st.total} reportadas</span><span class="muted">${pct}%</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="prog-legend"><span><i class="lg ok"></i>${st.delivered} entregadas</span><span><i class="lg bad"></i>${st.failed} no entregadas</span>
+        ${st.unsent ? `<button class="linkbtn c-warn" data-act="filter" data-f="unsent">${st.unsent} sin enviar</button>` : ''}</div>
     </section>
-    ${r ? `<section class="card routecard">
-        <div class="row" style="align-items:center"><div><div class="rc-title">🗺️ Ruta optimizada</div>
-          <div class="small muted">${r.count} paradas · ${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)}` : ''} · ${routeFrom(r)}</div></div>
-          <button class="btn small" style="flex:none" data-act="tab" data-tab="map">Ver mapa</button></div>
-        ${st.pending ? `<button class="btn small" style="width:100%;margin-top:10px" data-act="route-go">📍 Recalcular desde ${S.settings.startMode === 'gps' ? 'donde estoy' : 'el inicio'}</button>` : ''}
-        ${next ? `<div class="next"><span class="muted small">Próxima parada</span>
-          <button class="next-btn" data-act="open" data-id="${next.id}">${next.routeOrder != null ? `<span class="num">${next.routeOrder + 1}</span>` : ''}
-          <span><b>${esc(next.address)}</b>${next.orderNo ? `<span class="small muted"> · #${esc(next.orderNo)}${next.company ? ' · ' + esc(next.company) : ''}</span>` : ''}</span></button>
-          <a class="btn primary" href="${esc(navUrl('google', next, S.settings.city))}" target="_blank" rel="noopener">🧭 Ir a la próxima</a></div>` : ''}
-      </section>`
-    : st.pending > 1 ? `<button class="btn primary big" data-act="route-go">🗺️ Armar ruta optimizada</button>` : ''}
-    <div class="search"><input id="q" type="search" placeholder="🔎 Buscar calle, pedido, empresa…" value="${esc(S.query)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search"></div>
-    <div class="chips" role="tablist">${chips.map(([k, l]) => `<button class="chip ${S.filter === k ? 'active' : ''}" data-act="filter" data-f="${k}">${l}</button>`).join('')}</div>
-    <ul class="list" id="list"></ul>`;
+    ${next ? `<section class="card nextc">
+        <div class="eyebrow">Próxima parada${next.routeOrder != null ? ` · ${next.routeOrder + 1} de ${st.total}` : ''}</div>
+        <button class="nextc-main" data-act="open" data-id="${next.id}">
+          <span class="nextc-addr">${esc(next.address)}</span>
+          ${nextMeta ? `<span class="nextc-meta">${nextMeta}</span>` : ''}
+          ${next.refs ? `<span class="tag warn">${esc(next.refs)}</span>` : ''}</button>
+        <div class="row"><a class="btn primary" href="${esc(navUrl('google', next, S.settings.city))}" target="_blank" rel="noopener">${ic('nav')}Ir</a>
+          <button class="btn" data-act="open" data-id="${next.id}">Reportar</button></div>
+      </section>` : ''}
+    ${r ? `<div class="routeline">${ic('route')}<span>${fmtKm(r.distance)}${r.duration ? ` · ${fmtMin(r.duration)}` : ''} · ${routeFrom(r)}</span>
+        <button class="linkbtn" data-act="tab" data-tab="map">Mapa</button>
+        ${st.pending ? `<button class="linkbtn" data-act="route-go">Recalcular</button>` : ''}</div>`
+    : st.pending > 1 ? `<button class="btn primary" data-act="route-go">${ic('route')}Armar ruta optimizada</button>` : ''}
+    <div class="search">${ic('search')}<input id="q" type="search" placeholder="Buscar calle, pedido o empresa" value="${esc(S.query)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search"></div>
+    <div class="chips" role="tablist">${chips.filter(([k, , n]) => n || k === 'pending' || k === 'all').map(([k, l, n]) => `<button class="chip ${S.filter === k ? 'active' : ''}" data-act="filter" data-f="${k}">${l}<span class="chip-n">${n}</span></button>`).join('')}</div>
+    <ul class="slist" id="list"></ul>
+    ${done ? `<button class="btn ghost" data-act="tab" data-tab="history" style="margin-top:14px">${ic('doc')}Reportes de esta ruta (${done})</button>` : ''}`;
   $('#q').addEventListener('input', e => { S.query = e.target.value; renderList(); });
   renderList();
 }
@@ -303,18 +327,21 @@ function sortedItems() {
 
 function stopLi(it, dups = 0) {
   const n = it.status === 'pending' && it.routeOrder != null ? it.routeOrder + 1 : '';
-  return `<li><button class="addr ${it.status}" data-act="open" data-id="${it.id}">
-    <span class="num ${it.status}">${it.status === 'delivered' ? '✓' : it.status === 'failed' ? '✕' : n}</span>
+  const sub = [it.orderNo ? `<span class="mono">#${esc(it.orderNo)}</span>` : '', it.company ? `<b>${esc(it.company)}</b>` : '', it.zone ? esc(it.zone) : ''].filter(Boolean).join(' · ');
+  const tags = [
+    it.refs ? `<span class="tag warn">${esc(it.refs)}</span>` : '',
+    sendPill(it),
+    it.status === 'pending' && !it.company ? '<span class="tag bad">Sin empresa</span>' : '',
+    it.geo === 'fail' ? '<span class="tag bad">Sin ubicar</span>' : it.geo === 'approx' ? '<span class="tag">Ubicación aprox.</span>' : '',
+    dups > 1 ? `<span class="tag warn">Repetida ×${dups}</span>` : ''
+  ].filter(Boolean).join('');
+  return `<li><button class="srow ${it.status}" data-act="open" data-id="${it.id}">
+    <span class="num ${it.status}">${it.status === 'delivered' ? ic('check') : it.status === 'failed' ? ic('x') : n}</span>
     <span class="main">
-      ${it.orderNo || it.company ? `<div class="order">${it.orderNo ? `<span class="mono">#${esc(it.orderNo)}</span>` : ''}${it.orderNo && it.company ? ' · ' : ''}${it.company ? `<span class="co">${esc(it.company)}</span>` : ''}</div>` : ''}
-      <div class="street">${esc(it.address)}</div>
-      <div class="meta">${it.refs ? `<span class="ref">${esc(it.refs)}</span>` : ''}
-        ${it.zone ? `<span>${esc(it.zone)}</span>` : ''}
-        ${it.status !== 'pending' ? statusPill(it) : ''} ${sendPill(it)}
-        ${it.status === 'pending' && !it.company ? '<span class="pill warn">Sin empresa</span>' : ''}
-        ${it.geo === 'fail' ? '<span class="pill warn">Sin ubicar</span>' : it.geo === 'approx' ? '<span class="pill gray">Ubicación aprox.</span>' : ''}
-        ${dups > 1 ? `<span class="pill warn">Repetida ×${dups}</span>` : ''}</div></span>
-    <span class="chev">›</span></button></li>`;
+      <span class="street">${esc(it.address)}</span>
+      ${sub ? `<span class="sub">${sub}</span>` : ''}
+      ${tags ? `<span class="tags">${tags}</span>` : ''}</span>
+    ${ic('chev', 'chev')}</button></li>`;
 }
 
 function renderList() {
@@ -456,18 +483,18 @@ function vMap() {
     <div id="mapSel"></div>
     ${S.mapBusy ? `<div class="card" id="mapBusy" style="margin-top:10px"><span class="spinner"></span> <span>${esc(S.mapBusy)}</span></div>` : `
     <div class="stack" style="margin-top:12px">
-      <button class="btn primary big" data-act="route-build" ${pend.length ? '' : 'disabled'}>⚡ ${r ? 'Recalcular ruta' : 'Armar ruta optimizada'}</button>
-      ${r && pend.some(i => i.lat != null) ? `<a class="btn" href="${esc(multiStopUrl(pend))}" target="_blank" rel="noopener">🧭 Navegar las próximas ${Math.min(10, pend.filter(i => i.lat != null).length)} en Google Maps</a>` : ''}
+      <button class="btn primary big" data-act="route-build" ${pend.length ? '' : 'disabled'}>${ic(r ? 'refresh' : 'route')}${r ? 'Recalcular ruta' : 'Armar ruta optimizada'}</button>
+      ${r && pend.some(i => i.lat != null) ? `<a class="btn" href="${esc(multiStopUrl(pend))}" target="_blank" rel="noopener">${ic('nav')}Navegar las próximas ${Math.min(10, pend.filter(i => i.lat != null).length)} en Maps</a>` : ''}
       <div class="small muted">Inicio: ${S.settings.startMode === 'gps' ? 'tu ubicación actual' : S.settings.startMode === 'address' && S.settings.startAddress ? esc(S.settings.startAddress) : 'la primera parada'} · <button class="btn small link inline" data-act="tab" data-tab="settings">cambiar</button></div>
     </div>`}
-    ${missing.length ? `<h2>⚠️ No se encontraron (${missing.length})</h2>
+    ${missing.length ? `<h2 class="sec">No se encontraron en el mapa <span class="tag bad">${missing.length}</span></h2>
       <p class="small muted">Corregí la dirección o marcala a mano en el mapa.</p>
       <ul class="list">${missing.map(it => `<li class="card">${it.orderNo ? `<div class="small"><b>#${esc(it.orderNo)}</b>${it.company ? ' · ' + esc(it.company) : ''}</div>` : ''}
         <div style="font-weight:650">${esc(it.address)}</div>${it.zone ? `<div class="small muted">${esc(it.zone)}</div>` : ''}
         <div class="row" style="margin-top:8px"><button class="btn small" data-act="map-pick" data-id="${it.id}">📍 Marcar en el mapa</button>
         <button class="btn small" data-act="edit-addr" data-id="${it.id}">✏️ Corregir</button></div></li>`).join('')}</ul>` : ''}
-    ${approx.length ? `<p class="small muted" style="margin-top:12px">ℹ️ ${approx.length} ${approx.length === 1 ? 'parada quedó' : 'paradas quedaron'} ubicadas solo por la calle (sin el número exacto). Se marcan con borde punteado; podés moverlas desde la parada.</p>` : ''}
-    ${pend.length ? `<h2>Orden de visita</h2><ul class="list">${pend.map(it => stopLi(it)).join('')}</ul>` : '<p class="muted center">🎉 No quedan paradas pendientes.</p>'}
+    ${approx.length ? `<p class="hint" style="margin-top:12px">${approx.length} ${approx.length === 1 ? 'parada quedó' : 'paradas quedaron'} ubicadas solo por la calle (sin el número exacto). Se marcan con borde punteado; podés moverlas desde la parada.</p>` : ''}
+    ${pend.length ? `<h2 class="sec">Orden de visita</h2><ul class="slist">${pend.map(it => stopLi(it)).join('')}</ul>` : '<p class="muted center">No quedan paradas pendientes.</p>'}
     <p class="small muted center" style="margin-top:16px">Mapa © colaboradores de OpenStreetMap · Ruta: OSRM</p>`;
   drawMap();
 }
@@ -630,51 +657,51 @@ async function vDetail() {
   const siblings = (byBase[baseKey(it.address)] || []).filter(id => id !== it.id).map(itemById);
   const ph = it.photoId ? await photoUrl(it.photoId) : '';
   const ciPrev = S.quickCi?.id === it.id ? S.quickCi.value : '';
-  $('#view').innerHTML = `${backBtn()}
-    <div class="card">
-      ${it.orderNo || it.company ? `<div class="order big">${it.orderNo ? `<span class="mono">#${esc(it.orderNo)}</span>` : ''}${it.orderNo && it.company ? ' · ' : ''}${it.company ? `<span class="co">${esc(it.company)}</span>` : ''}</div>` : ''}
-      <div style="font-size:26px;font-weight:700;line-height:1.2">${esc(it.address)}</div>
-      ${it.refs ? `<div style="margin-top:8px;font-size:20px"><span class="ref">${esc(it.refs)}</span></div>` : ''}
+  const head = [it.orderNo ? `<span class="mono">#${esc(it.orderNo)}</span>` : '', it.company ? esc(it.company) : '<span class="c-bad">Sin empresa</span>'].filter(Boolean).join(' · ');
+  const geoTxt = it.geo === 'exact' ? 'Ubicada en el mapa' : it.geo === 'approx' ? 'Ubicación aproximada (solo la calle)' : it.geo === 'manual' ? 'Marcada a mano en el mapa' : it.geo === 'fail' ? 'No se encontró en el mapa' : 'Todavía no se ubicó en el mapa';
+  $('#view').innerHTML = `${backBtn('Paradas')}
+    <section class="card stop-head">
+      <div class="eyebrow">${head}</div>
+      <h2 class="stop-addr">${esc(it.address)}</h2>
+      ${it.refs ? `<span class="tag warn big">${esc(it.refs)}</span>` : ''}
       ${it.zone ? `<div class="muted" style="margin-top:6px">${esc(it.zone)}</div>` : ''}
-      <div class="row" style="margin-top:12px">
-        <a class="btn small" href="${esc(navUrl('google', it, S.settings.city))}" target="_blank" rel="noopener">🧭 Google Maps</a>
-        <a class="btn small" href="${esc(navUrl('waze', it, S.settings.city))}" target="_blank" rel="noopener">🚗 Waze</a></div>
-      <details style="margin-top:10px"><summary class="small muted">Texto original y ubicación</summary>
-        <div class="small muted" style="margin-top:6px">“${esc(it.original)}”</div>
-        ${it.crop ? `<img src="${it.crop}" alt="Recorte de la captura" style="width:100%;margin-top:6px;border-radius:6px;background:#fff">` : ''}
-        <div class="small muted" style="margin-top:6px">${it.geo === 'exact' ? '📍 Ubicada en el mapa' : it.geo === 'approx' ? '📍 Ubicación aproximada (solo la calle)' : it.geo === 'manual' ? '📍 Marcada a mano' : it.geo === 'fail' ? '⚠️ No se encontró en el mapa' : 'Todavía no se ubicó en el mapa'}</div>
-      </details>
-      <div class="row" style="margin-top:4px"><button class="btn small link" data-act="edit-addr" data-id="${it.id}" style="padding-left:0">✏️ Corregir datos</button>
-        <button class="btn small link" data-act="map-pick" data-id="${it.id}">📍 ${it.lat != null ? 'Mover en el mapa' : 'Marcar en el mapa'}</button></div>
-    </div>
-    ${siblings.length ? `<div class="alert warn" style="margin-top:10px">⚠️ Hay ${siblings.length + 1} registros en ${esc(it.address)}:
+      <div class="row" style="margin-top:14px">
+        <a class="btn" href="${esc(navUrl('google', it, S.settings.city))}" target="_blank" rel="noopener">${ic('nav')}Maps</a>
+        <a class="btn" href="${esc(navUrl('waze', it, S.settings.city))}" target="_blank" rel="noopener">${ic('car')}Waze</a></div>
+    </section>
+    ${siblings.length ? `<div class="notice static">Hay ${siblings.length + 1} paradas en ${esc(it.address)}:
       ${[it, ...siblings].map(s => `<b>${esc(s.refs || 'sin referencia')}</b>${s.orderNo ? ` (#${esc(s.orderNo)})` : ''}${s.status !== 'pending' ? ` (${STATUS_LABEL[s.status].toLowerCase()})` : ''}`).join(', ')}. Verificá la referencia antes de reportar.</div>` : ''}
     ${it.status === 'pending' ? `
-      <div class="card" style="margin-top:12px">
+      <section class="card">
         <label class="field" style="margin-top:0"><span>Cédula de quien recibe</span>
-          <input id="q-ci" class="mono" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="Ej: 1234567-2" value="${esc(ciPrev)}">
+          <input id="q-ci" class="mono" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="1234567-2" value="${esc(ciPrev)}">
           <div id="q-ci-msg" class="hint">Con o sin puntos y guion.</div></label>
-        <button class="btn ok big" style="margin-top:12px" data-act="quick-deliver" data-id="${it.id}">✅ Entregado</button>
-      </div>
-      <div class="stack" style="margin-top:10px">
-        <button class="btn bad" data-act="start" data-type="failed" data-id="${it.id}">❌ No entregado</button>
-      </div>` : `
-      <h2>Reporte</h2>
-      <div class="card stack">
-        <div>${statusPill(it)} ${sendPill(it)}</div>
-        <dl class="kv"><dt>Paquete</dt><dd class="mono">#${esc(it.pkg)}</dd>
+        <button class="btn ok big" style="margin-top:14px" data-act="quick-deliver" data-id="${it.id}">${ic('check')}Entregado</button>
+        <button class="btn outline-bad" style="margin-top:10px" data-act="start" data-type="failed" data-id="${it.id}">${ic('x')}No entregado</button>
+      </section>` : `
+      <section class="card">
+        <div class="row-between"><h3 style="margin:0">Reporte</h3><span>${statusPill(it)} ${sendPill(it)}</span></div>
+        <dl class="kv" style="margin-top:10px"><dt>Pedido</dt><dd class="mono">#${esc(it.pkg)}</dd>
         ${it.status === 'delivered' ? `<dt>Cédula</dt><dd class="mono">${esc(it.cedula)}</dd>` : `<dt>Motivo</dt><dd>${esc(reasonSentence(it.reasonCode, it.reasonText))}</dd>`}
         <dt>Hora</dt><dd>${fmtTime(it.reportedAt)}</dd>
         ${it.sendAttempts ? `<dt>Intentos</dt><dd>${it.sendAttempts}</dd>` : ''}</dl>
-        ${ph ? `<img class="photo" src="${ph}" alt="Foto de evidencia">` : ''}
-        <div class="bubble">${esc(it.message)}</div>
-      </div>
-      <div class="stack" style="margin-top:12px">
-        ${it.sendStatus !== 'sent' ? `<button class="btn wa big" data-act="goto-send" data-id="${it.id}">📤 Enviar por WhatsApp</button>` : ''}
-        ${it.sendStatus !== 'sent' ? `<button class="btn" data-act="mark-sent" data-id="${it.id}">Ya lo envié: marcar como enviado</button>` : ''}
-        <button class="btn" data-act="start" data-type="${it.status}" data-id="${it.id}" data-correct="1">✏️ Corregir reporte</button>
-        <button class="btn danger-outline" data-act="reset" data-id="${it.id}">↩︎ Volver a pendiente</button>
-      </div>`}`;
+        ${ph ? `<img class="photo" src="${ph}" alt="Foto de evidencia" style="margin-top:10px">` : ''}
+        <div class="bubble" style="margin-top:12px">${esc(it.message)}</div>
+        ${it.sendStatus !== 'sent' ? `<button class="btn wa big" style="margin-top:14px" data-act="goto-send" data-id="${it.id}">${ic('share')}Enviar por WhatsApp</button>
+          <button class="btn ghost" style="margin-top:8px" data-act="mark-sent" data-id="${it.id}">Ya lo envié: marcar como enviado</button>` : ''}
+      </section>
+      <div class="menu">
+        <button data-act="start" data-type="${it.status}" data-id="${it.id}" data-correct="1"><span>Corregir reporte</span>${ic('chev')}</button>
+        <button class="danger" data-act="reset" data-id="${it.id}"><span>Volver a pendiente</span>${ic('chev')}</button>
+      </div>`}
+    <div class="menu">
+      <button data-act="edit-addr" data-id="${it.id}"><span>Corregir datos de la parada</span>${ic('chev')}</button>
+      <button data-act="map-pick" data-id="${it.id}"><span>${it.lat != null ? 'Mover en el mapa' : 'Marcar en el mapa'}<small>${geoTxt}</small></span>${ic('chev')}</button>
+    </div>
+    <details class="orig"><summary>Texto original de la lista</summary>
+      <div class="small muted" style="margin-top:6px">“${esc(it.original)}”</div>
+      ${it.crop ? `<img src="${it.crop}" alt="Recorte de la captura">` : ''}
+    </details>`;
   const ci = $('#q-ci');
   if (ci) {
     const upd = () => {
@@ -1066,21 +1093,20 @@ function vImport() {
   const lowN = active.filter(x => x.r.lowConf).length;
   const dupN = active.filter(x => x.r.dupRows?.length || x.r.dupExisting).length;
   $('#view').innerHTML = `
-    <div class="card"><div style="font-weight:700">${imp.target === 'append' && S.day ? `Se agregan a la ruta del ${routeTitle(S.day)}` : '📦 Se crea una ruta nueva'}</div>
-      <div class="small muted" style="margin-top:4px">Podés elegir varias capturas de la misma lista: quedan todas en esta ruta.</div>
-      ${S.day ? `<label class="reason" style="margin-top:8px"><input type="checkbox" id="tgtAppend" ${imp.target === 'append' ? 'checked' : ''}>En vez de eso, agregar a la ruta abierta (${routeTitle(S.day)})</label>` : ''}
-    </div>
-    <h2>1. Agregar capturas</h2>
     <div class="stack">
-      <label class="btn primary big" for="imp-gal">🖼️ Elegir capturas</label>
-      <div class="row"><label class="btn" for="imp-cam">📷 Sacar foto</label><button class="btn" data-act="imp-paste">⌨️ Pegar texto</button></div>
+      <label class="btn primary big" for="imp-gal">${ic('plus')}Elegir capturas de la lista</label>
+      <div class="row"><label class="btn" for="imp-cam">Sacar foto</label><button class="btn" data-act="imp-paste">Pegar texto</button></div>
       <input type="file" id="imp-gal" class="hidden-input" accept="image/*" multiple>
       <input type="file" id="imp-cam" class="hidden-input" accept="image/*" capture="environment">
-      <div class="small muted">El reconocimiento se hace en este teléfono: las capturas no se suben a ningún servidor. La primera vez descarga el motor de lectura (~15&nbsp;MB).</div>
-      <button class="btn" data-act="imp-link">🔗 Pegar link de ruta</button>
-      <label class="btn" for="imp-shared">📂 Abrir ruta compartida (archivo .json)</label>
-      <input type="file" id="imp-shared" class="hidden-input" accept=".json,application/json">
+      <p class="hint" style="margin:2px 2px 0">Podés elegir varias capturas de la misma lista. Se leen en este teléfono; no se suben a ningún servidor.</p>
+      ${S.day ? `<label class="reason"><input type="checkbox" id="tgtAppend" ${imp.target === 'append' ? 'checked' : ''}><span>Agregar a la ruta abierta <span class="muted">(${routeTitle(S.day)})</span> en vez de crear una nueva</span></label>` : ''}
     </div>
+    ${!imp.images.length && !imp.manual.length ? `<h2 class="sec">¿Te compartieron una ruta?</h2>
+    <div class="menu">
+      <button data-act="imp-link"><span>Pegar link de ruta</span>${ic('chev')}</button>
+      <label for="imp-shared"><span>Abrir archivo de ruta (.json)</span>${ic('chev')}</label>
+    </div>` : ''}
+    <input type="file" id="imp-shared" class="hidden-input" accept=".json,application/json">
     ${imp.pasteOpen ? `<div class="card" style="margin-top:12px"><div style="font-weight:700">Pegar o escribir direcciones</div>
       <div class="small muted">Una por línea. Truco: en Fotos abrí la captura, mantené apretado el texto (Texto en vivo) → Seleccionar todo → Copiar, y pegalo acá.</div>
       <label class="field"><textarea id="paste" rows="6" placeholder="Zum Felde 2190, casa&#10;Zum Felde 2190, apto 2"></textarea></label>
@@ -1416,27 +1442,19 @@ async function vHistory() {
   const st = dayStats(S.items);
   const reports = S.items.filter(i => i.status !== 'pending').sort((a, b) => (b.reportedAt || 0) - (a.reportedAt || 0));
   const unsent = reports.filter(i => i.sendStatus !== 'sent');
-  setTop('Historial', S.day ? `Reportes de la ruta ${routeTitle(S.day)}` : '');
-  const repLi = it => `<li><button class="addr ${it.status}" data-act="open" data-id="${it.id}"><span class="dot ${it.status}"></span>
-    <span class="main"><div class="street"><span class="mono">#${esc(it.pkg)}</span> · ${esc(it.address)}</div>
-    <div class="meta">${it.refs ? `<span class="ref">${esc(it.refs)}</span>` : ''}${statusPill(it)} ${sendPill(it)} <span>${fmtTime(it.reportedAt)}</span>
-    ${it.status === 'delivered' ? `<span class="mono">CI ${esc(it.cedula)}</span>` : `<span>${esc(REASONS.find(r => r.code === it.reasonCode)?.label || '')}</span>${it.photoId ? ' 📷' : ''}`}</div></span>
-    <span class="chev">›</span></button></li>`;
-  $('#view').innerHTML = S.day ? `
-    <div class="stats">
-      <div class="stat"><b>${st.total}</b><span>Importadas</span></div>
-      <div class="stat"><b>${st.pending}</b><span>Pendientes</span></div>
-      <div class="stat"><b style="color:var(--ok)">${st.delivered}</b><span>Entregadas</span></div>
-      <div class="stat"><b style="color:var(--bad)">${st.failed}</b><span>No entregadas</span></div>
-      <div class="stat" style="grid-column:span 2"><b style="color:${st.unsent ? 'var(--warn)' : 'inherit'}">${st.unsent}</b><span>Reportes pendientes de envío o confirmación</span></div>
-    </div>
-    ${unsent.length ? `<h2>⚠️ Sin enviar o sin confirmar</h2><ul class="list">${unsent.map(repLi).join('')}</ul>` : ''}
-    <h2>Reportes (${reports.length})</h2>
-    ${reports.length ? `<ul class="list">${reports.map(repLi).join('')}</ul>` : '<p class="muted">Todavía no hay reportes.</p>'}
-  ` : '<p class="muted">No hay ninguna ruta abierta. Elegí una en Rutas.</p>';
-  $('#view').insertAdjacentHTML('beforeend', `
-    <button class="btn" data-act="tab" data-tab="routes" style="margin-top:16px">📦 Ver todas las rutas</button>
-    <p class="small muted">Los datos (direcciones, cédulas y fotos) se guardan solo en este iPhone, dentro de la app. Las rutas de más de ${S.settings.retentionDays} días se borran solas (cambialo en Ajustes).</p>`);
+  if (!S.day) return go('routes', {}, true);
+  setTop('Reportes', `Ruta del ${esc(fmtDay(S.day.createdAt))} · ${st.delivered} entregadas · ${st.failed} no entregadas`);
+  const repLi = it => `<li><button class="srow ${it.status}" data-act="open" data-id="${it.id}">
+    <span class="num ${it.status}">${it.status === 'delivered' ? ic('check') : ic('x')}</span>
+    <span class="main"><span class="street"><span class="mono">#${esc(it.pkg)}</span>${it.company ? ` · ${esc(it.company)}` : ''}</span>
+      <span class="sub">${fmtTime(it.reportedAt)} · ${it.status === 'delivered' ? `CI <span class="mono">${esc(it.cedula)}</span>` : esc(REASONS.find(r => r.code === it.reasonCode)?.label || '')}${it.photoId ? ' · con foto' : ''}</span>
+      ${sendPill(it) ? `<span class="tags">${sendPill(it)}</span>` : ''}</span>
+    ${ic('chev', 'chev')}</button></li>`;
+  $('#view').innerHTML = `<button class="back" data-act="tab" data-tab="route">${ic('back')}Paradas</button>
+    ${unsent.length ? `<h2 class="sec">Sin enviar o sin confirmar <span class="tag warn">${unsent.length}</span></h2><ul class="slist">${unsent.map(repLi).join('')}</ul>` : ''}
+    <h2 class="sec">Todos los reportes <span class="tag">${reports.length}</span></h2>
+    ${reports.length ? `<ul class="slist">${reports.map(repLi).join('')}</ul>` : '<p class="muted">Todavía no hay reportes en esta ruta.</p>'}
+    <p class="foot">Los datos (direcciones, cédulas y fotos) se guardan solo en este teléfono.</p>`;
 }
 
 /* ================= Ajustes ================= */
@@ -1567,7 +1585,7 @@ function vHelp() {
     <h3>Uso diario</h3>
     <ol class="steps"><li><b>Importar</b> → elegí las capturas de la lista → revisá pedido, empresa y dirección (las dudosas quedan en amarillo) → Importar.</li>
     <li>En <b>Mapa</b> tocá <b>Armar ruta optimizada</b>: las paradas quedan numeradas en el orden más corto.</li>
-    <li>En <b>Reparto</b> seguí el orden (o buscá por calle, pedido o empresa) y tocá la parada. <b>Ir</b> abre Google Maps o Waze.</li>
+    <li>En <b>Rutas</b> entrá a la ruta, seguí el orden (o buscá por calle, pedido o empresa) y tocá la parada. <b>Ir</b> abre Google Maps o Waze.</li>
     <li><b>Entregado</b>: escribí la cédula y tocá Entregado → revisá → Confirmar → <b>Abrir WhatsApp</b> → Enviar.</li>
     <li><b>No entregado</b>: número, motivo y foto → Revisar → Confirmar → <b>Compartir foto + texto</b> → WhatsApp → tu tía → Enviar.</li>
     <li>Volvé a la app y tocá <b>Sí, enviado</b>. Si no, el reporte queda en “Sin enviar”.</li></ol>
@@ -1587,7 +1605,7 @@ document.addEventListener('click', async e => {
   const it = id ? itemById(id) : null;
   switch (act) {
     case 'back': history.back(); break;
-    case 'tab': go(el.dataset.tab, {}, el.dataset.tab !== 'help'); break;
+    case 'tab': go(el.dataset.tab, {}, !['help', 'history'].includes(el.dataset.tab)); break;
     case 'filter': S.filter = el.dataset.f; S.query = ''; vRoute(); break;
     case 'open': go('detail', { id }); break;
     case 'start': startDraft(id, el.dataset.type, el.dataset.correct === '1'); break;
