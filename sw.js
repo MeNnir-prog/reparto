@@ -1,5 +1,5 @@
 // sw.js — Permite abrir la app sin conexión. No guarda datos personales: solo archivos de la app y del motor OCR.
-const VERSION = 'reparto-v1.4.2';
+const VERSION = 'reparto-v1.4.3';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './db.js', './logic.js', './ocr.js', './map.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 // Librerías de versión fija (OCR y mapa): caché permanente. Las búsquedas de direcciones, rutas y mapas no se guardan acá.

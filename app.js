@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -311,6 +311,7 @@ function stopLi(it, dups = 0) {
       <div class="meta">${it.refs ? `<span class="ref">${esc(it.refs)}</span>` : ''}
         ${it.zone ? `<span>${esc(it.zone)}</span>` : ''}
         ${it.status !== 'pending' ? statusPill(it) : ''} ${sendPill(it)}
+        ${it.status === 'pending' && !it.company ? '<span class="pill warn">Sin empresa</span>' : ''}
         ${it.geo === 'fail' ? '<span class="pill warn">Sin ubicar</span>' : it.geo === 'approx' ? '<span class="pill gray">Ubicación aprox.</span>' : ''}
         ${dups > 1 ? `<span class="pill warn">Repetida ×${dups}</span>` : ''}</div></span>
     <span class="chev">›</span></button></li>`;
@@ -697,10 +698,11 @@ async function quickDeliver(id) {
   const c = parseCedula(value);
   if (value.trim() && !c.ok) { $('#q-ci-msg').className = 'err'; $('#q-ci-msg').textContent = c.error; $('#q-ci').focus(); return; }
   if (S.draft && S.draft.photoId && S.draft.itemId !== id) await discardDraftPhoto();
-  S.draft = { itemId: id, type: 'delivered', correcting: false, pkg: it.orderNo || '', cedula: value, reasonCode: '', reasonText: '', photoId: null, photoIsNew: false };
+  S.draft = { itemId: id, type: 'delivered', correcting: false, pkg: it.orderNo || '', company: it.company || '', cedula: value, reasonCode: '', reasonText: '', photoId: null, photoIsNew: false };
   await saveDraft();
   S.quickCi = null;
-  if (c.ok && validatePackage(S.draft.pkg).ok) { S.draft.pkg = validatePackage(S.draft.pkg).value; await saveDraft(); go('confirm', { id }); }
+  // Directo a revisar solo si está todo: pedido, empresa y cédula. Si falta algo, al formulario.
+  if (c.ok && validatePackage(S.draft.pkg).ok && cleanSpaces(S.draft.company)) { S.draft.pkg = validatePackage(S.draft.pkg).value; await saveDraft(); go('confirm', { id }); }
   else go('deliver', { id });
 }
 
@@ -710,7 +712,7 @@ async function startDraft(id, type, correcting) {
   if (S.draft && S.draft.photoId && S.draft.itemId !== id) await discardDraftPhoto();
   S.draft = {
     itemId: id, type, correcting: !!correcting,
-    pkg: correcting ? it.pkg : (it.orderNo || ''), cedula: correcting && type === 'delivered' ? it.cedula : '',
+    pkg: correcting ? it.pkg : (it.orderNo || ''), company: it.company || '', cedula: correcting && type === 'delivered' ? it.cedula : '',
     reasonCode: correcting && type === 'failed' ? it.reasonCode : '', reasonText: correcting ? (it.reasonText || '') : '',
     photoId: correcting && type === 'failed' ? it.photoId : null, photoIsNew: false
   };
@@ -737,16 +739,32 @@ function pkgField(d) {
     <div class="err" id="pkg-err"></div></label>`;
 }
 
+/** Empresa del reporte (obligatoria). Si la parada no la tiene, se elige de las empresas de la ruta o se escribe. */
+function companyField(d) {
+  const it = itemById(d.itemId);
+  const known = [...new Set(S.items.map(i => i.company).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const missing = !cleanSpaces(it?.company);
+  return `<label class="field"><span>Empresa</span>
+    <input id="f-co" list="co-list" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next" placeholder="Ej: Nova" value="${esc(d.company || '')}">
+    <datalist id="co-list">${known.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    ${missing ? `<div class="hint" style="color:var(--warn);font-weight:600">Esta parada no tiene empresa en la lista: escribila o elegila${known.length ? '' : ''}.</div>` : '<div class="hint">Viene de la lista.</div>'}
+    ${missing && known.length ? `<div class="chips" style="margin-top:6px">${known.map(c => `<button type="button" class="chip" data-act="pick-co" data-co="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+    <div class="err" id="co-err"></div></label>`;
+}
+
 function bindPkg() {
   $('#f-pkg').addEventListener('input', e => { S.draft.pkg = e.target.value; $('#pkg-err').textContent = ''; saveDraft(); });
+  $('#f-co')?.addEventListener('input', e => { S.draft.company = e.target.value; $('#co-err').textContent = ''; saveDraft(); });
 }
 
 function vDeliver() {
   const it = itemById(S.params.id); const d = S.draft;
   if (!it || !d) return go('route', {}, true);
   setTop('✅ Entregado', esc(fullAddress(it)));
+  if (d.company == null) d.company = it.company || '';
   $('#view').innerHTML = `${backBtn('Cancelar')}${addrHeader(it)}
     ${pkgField(d)}
+    ${companyField(d)}
     <label class="field"><span>Cédula de quien recibe</span>
       <input id="f-ci" class="mono" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="Ej: 1234567-2" value="${esc(d.cedula)}">
       <div class="hint">Con o sin puntos y guion. El último número es el dígito verificador.</div>
@@ -762,7 +780,7 @@ function vDeliver() {
   };
   ci.addEventListener('input', () => { d.cedula = ci.value; upd(); saveDraft(); });
   upd();
-  setTimeout(() => (d.pkg ? $('#f-ci') : $('#f-pkg'))?.focus(), 250);
+  setTimeout(() => (!d.pkg ? $('#f-pkg') : !cleanSpaces(d.company) ? $('#f-co') : $('#f-ci'))?.focus(), 250);
 }
 
 async function vFail() {
@@ -770,8 +788,10 @@ async function vFail() {
   if (!it || !d) return go('route', {}, true);
   setTop('❌ No entregado', esc(fullAddress(it)));
   const ph = d.photoId ? await photoUrl(d.photoId) : '';
+  if (d.company == null) d.company = it.company || '';
   $('#view').innerHTML = `${backBtn('Cancelar')}${addrHeader(it)}
     ${pkgField(d)}
+    ${companyField(d)}
     <div class="field"><span>Motivo</span><div class="reasons">
       ${REASONS.map(r => `<label class="reason ${d.reasonCode === r.code ? 'sel' : ''}"><input type="radio" name="reason" value="${r.code}" ${d.reasonCode === r.code ? 'checked' : ''}>${esc(r.label)}</label>`).join('')}
     </div><div class="err" id="reason-err"></div></div>
@@ -815,6 +835,7 @@ async function review() {
   const p = validatePackage(d.pkg);
   let bad = false;
   if (!p.ok) { $('#pkg-err').textContent = p.error; bad = true; }
+  if (!cleanSpaces(d.company)) { $('#co-err').textContent = 'Falta la empresa: va en el mensaje'; bad = true; }
   if (d.type === 'delivered') {
     const c = parseCedula(d.cedula);
     if (!c.ok) { $('#ci-msg').innerHTML = `<div class="err">${esc(c.error)}</div>`; bad = true; }
@@ -827,7 +848,7 @@ async function review() {
     }
   }
   if (bad) { window.scrollTo(0, 0); return; }
-  d.pkg = p.value; await saveDraft();
+  d.pkg = p.value; d.company = cleanSpaces(d.company); await saveDraft();
   go('confirm', { id: it.id });
 }
 
@@ -835,9 +856,11 @@ async function vConfirm() {
   const d = S.draft; const it = d && itemById(d.itemId);
   if (!it) return go('route', {}, true);
   const addr = fullAddress(it);
+  const company = cleanSpaces(d.company ?? it.company);
+  if (!company) return go(d.type === 'delivered' ? 'deliver' : 'fail', { id: it.id }, true); // sin empresa no se envía
   const ci = d.type === 'delivered' ? parseCedula(d.cedula) : null;
-  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, company: it.company, cedula: ci.formatted })
-    : buildFailedMessage({ pkg: d.pkg, company: it.company, reasonCode: d.reasonCode, reasonText: d.reasonText });
+  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, company, cedula: ci.formatted })
+    : buildFailedMessage({ pkg: d.pkg, company, reasonCode: d.reasonCode, reasonText: d.reasonText });
   const conflicts = findPackageConflicts(S.items, d.pkg, it.id);
   const ph = d.photoId ? await photoUrl(d.photoId) : '';
   const warn = [];
@@ -850,7 +873,7 @@ async function vConfirm() {
     <div class="card"><dl class="kv">
       <dt>Tipo</dt><dd>${d.type === 'delivered' ? '<span class="pill ok">✅ Entregado</span>' : '<span class="pill bad">❌ No entregado</span>'}</dd>
       <dt>Pedido</dt><dd class="mono" style="font-size:22px">#${esc(d.pkg)}</dd>
-      <dt>Empresa</dt><dd>${it.company ? esc(it.company) : '<span class="muted">—</span>'}</dd>
+      <dt>Empresa</dt><dd>${esc(company)}</dd>
       <dt>Dirección</dt><dd>${esc(addr)} <div class="small muted">(no va en el mensaje)</div></dd>
       ${d.type === 'delivered' ? `<dt>Cédula</dt><dd class="mono" style="font-size:22px">${esc(ci.formatted)}</dd>` :
         `<dt>Motivo</dt><dd>${esc(reasonSentence(d.reasonCode, d.reasonText))}</dd><dt>Foto</dt><dd>${ph ? 'Sí' : '<span style="color:var(--bad)">Sin foto</span>'}</dd>`}
@@ -868,13 +891,17 @@ async function commitReport(force) {
     if (!ok) return;
   }
   const prevPhoto = it.photoId;
+  // La empresa elegida en el reporte queda guardada en la parada
+  const company = cleanSpaces(d.company ?? it.company);
+  if (!company) return go(d.type === 'delivered' ? 'deliver' : 'fail', { id: it.id }, true);
+  it.company = company;
   if (d.type === 'delivered') {
     const ci = parseCedula(d.cedula);
     Object.assign(it, { status: 'delivered', pkg: d.pkg, cedula: ci.formatted, reasonCode: '', reasonText: '', photoId: null });
-    it.message = buildDeliveredMessage({ pkg: d.pkg, company: it.company, cedula: ci.formatted });
+    it.message = buildDeliveredMessage({ pkg: d.pkg, company, cedula: ci.formatted });
   } else {
     Object.assign(it, { status: 'failed', pkg: d.pkg, cedula: '', reasonCode: d.reasonCode, reasonText: d.reasonCode === 'otro' ? cleanSpaces(d.reasonText) : '', photoId: d.photoId || null });
-    it.message = buildFailedMessage({ pkg: d.pkg, company: it.company, reasonCode: d.reasonCode, reasonText: d.reasonText });
+    it.message = buildFailedMessage({ pkg: d.pkg, company, reasonCode: d.reasonCode, reasonText: d.reasonText });
   }
   // Minimizar datos: si cambió la foto o pasó a entregado, borrar la foto anterior
   if (prevPhoto && prevPhoto !== it.photoId) { await DB.deletePhoto(prevPhoto); S.photoUrls.delete(prevPhoto); }
@@ -1565,6 +1592,7 @@ document.addEventListener('click', async e => {
     case 'open': go('detail', { id }); break;
     case 'start': startDraft(id, el.dataset.type, el.dataset.correct === '1'); break;
     case 'quick-deliver': quickDeliver(id); break;
+    case 'pick-co': if (S.draft) { S.draft.company = el.dataset.co; saveDraft(); const f = $('#f-co'); if (f) { f.value = el.dataset.co; $('#co-err').textContent = ''; } } break;
     case 'route-go': go('map', {}, true); buildRoute(); break;
     case 'route-build': buildRoute(); break;
     case 'map-pick': S.pick = id; S.mapSel = null; go('map', {}, S.view === 'map'); toast('Tocá en el mapa dónde queda'); break;
