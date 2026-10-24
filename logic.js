@@ -170,8 +170,9 @@ export function reasonSentence(code, otherText) {
   return t;
 }
 
-export function buildDeliveredMessage({ pkg, address, cedula }) {
-  return `#${cleanPackage(pkg)}\n${cleanSpaces(address)}\n${cedula}`;
+/** "#1162\nAquora\nAvenida Italia 4102\n1234567-2" (sin empresa, la línea no va). */
+export function buildDeliveredMessage({ pkg, company, address, cedula }) {
+  return [`#${cleanPackage(pkg)}`, cleanSpaces(company), cleanSpaces(address), cedula].filter(Boolean).join('\n');
 }
 
 export function buildFailedMessage({ pkg, address, reasonCode, reasonText }) {

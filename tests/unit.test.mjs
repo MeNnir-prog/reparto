@@ -18,6 +18,7 @@ test('cédula: formatos aceptados y dígito verificador', () => {
 
 test('mensaje de entrega: formato exacto', () => {
   assert.equal(L.buildDeliveredMessage({ pkg: '#1567', address: '8 de octubre', cedula: '4567890-3' }), '#1567\n8 de octubre\n4567890-3');
+  assert.equal(L.buildDeliveredMessage({ pkg: '1162', company: 'Aquora', address: 'Avenida Italia 4102', cedula: '1234567-2' }), '#1162\nAquora\nAvenida Italia 4102\n1234567-2');
 });
 
 test('mensaje de no entrega: refleja el motivo elegido', () => {

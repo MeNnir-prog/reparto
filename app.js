@@ -8,7 +8,7 @@ import {
 } from './logic.js';
 import { navUrl, multiStopUrl, purgeGeoCache } from './map.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const DEFAULT_SETTINGS = {
   name: 'Tía', phone: '', linkMode: 'app', retentionDays: 7, apiEnabled: false, apiUrl: '', apiToken: '',
   city: 'Montevideo', startMode: 'gps', startAddress: '', mapConsent: false
@@ -836,7 +836,7 @@ async function vConfirm() {
   if (!it) return go('route', {}, true);
   const addr = fullAddress(it);
   const ci = d.type === 'delivered' ? parseCedula(d.cedula) : null;
-  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, address: addr, cedula: ci.formatted })
+  const msg = d.type === 'delivered' ? buildDeliveredMessage({ pkg: d.pkg, company: it.company, address: addr, cedula: ci.formatted })
     : buildFailedMessage({ pkg: d.pkg, address: addr, reasonCode: d.reasonCode, reasonText: d.reasonText });
   const conflicts = findPackageConflicts(S.items, d.pkg, it.id);
   const ph = d.photoId ? await photoUrl(d.photoId) : '';
@@ -871,7 +871,7 @@ async function commitReport(force) {
   if (d.type === 'delivered') {
     const ci = parseCedula(d.cedula);
     Object.assign(it, { status: 'delivered', pkg: d.pkg, cedula: ci.formatted, reasonCode: '', reasonText: '', photoId: null });
-    it.message = buildDeliveredMessage({ pkg: d.pkg, address: addr, cedula: ci.formatted });
+    it.message = buildDeliveredMessage({ pkg: d.pkg, company: it.company, address: addr, cedula: ci.formatted });
   } else {
     Object.assign(it, { status: 'failed', pkg: d.pkg, cedula: '', reasonCode: d.reasonCode, reasonText: d.reasonCode === 'otro' ? cleanSpaces(d.reasonText) : '', photoId: d.photoId || null });
     it.message = buildFailedMessage({ pkg: d.pkg, address: addr, reasonCode: d.reasonCode, reasonText: d.reasonText });
@@ -1614,7 +1614,7 @@ document.addEventListener('click', async e => {
         it.address = a; it.refs = cleanSpaces($('#e-refs').value); it.zone = zone;
         it.orderNo = cleanPackage($('#e-order').value); it.company = cleanSpaces($('#e-co').value);
         if (it.status !== 'pending') {
-          it.message = it.status === 'delivered' ? buildDeliveredMessage({ pkg: it.pkg, address: fullAddress(it), cedula: it.cedula })
+          it.message = it.status === 'delivered' ? buildDeliveredMessage({ pkg: it.pkg, company: it.company, address: fullAddress(it), cedula: it.cedula })
             : buildFailedMessage({ pkg: it.pkg, address: fullAddress(it), reasonCode: it.reasonCode, reasonText: it.reasonText });
           if (it.sendStatus === 'sent') toast('Ojo: el mensaje ya enviado tenía la dirección anterior', 4000);
         }

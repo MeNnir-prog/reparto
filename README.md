@@ -143,9 +143,11 @@ Reintentar usa el **mismo** registro (cuenta intentos), nunca crea un segundo re
 ### Formato de los mensajes
 ```
 #1567
+Nova
 Zum Felde 2190, apto 2
 4567890-5
 ```
+(La línea de la empresa va solo si la parada tiene empresa.)
 ```
 #2001
 Camino Carrasco 7012
